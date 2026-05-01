@@ -1,264 +1,224 @@
 # dira-api
 
-**Backend API — Dira Climate Verification Infrastructure**
+**Dira — Backend API, AI Verification Engine, and Circular Economy Services**
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Built with Fastify](https://img.shields.io/badge/Built_with-Fastify_4-black)](https://fastify.dev)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5-blue)](https://typescriptlang.org)
-[![Midnight Mainnet](https://img.shields.io/badge/Midnight-Mainnet-1A1A6E)](https://midnight.network)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-teal.svg)](https://opensource.org/licenses/Apache-2.0)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
+[![Fastify](https://img.shields.io/badge/Fastify-4.x-black.svg)](https://fastify.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
+[![Midnight](https://img.shields.io/badge/Midnight-Mainnet-1A1A6E.svg)](https://midnight.network/)
+[![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
-> *Your data earns your airtime. Your data grows your crops. Your data builds your safety net.*
-
----
-
-## What Is Dira?
-
-Dira is a Decentralised Physical Infrastructure Network (DePIN) that turns the existing smartphone network into the most granular agricultural weather sensing layer in Sub-Saharan Africa. Every verified data point is anchored as a zero-knowledge proof on the [Midnight blockchain](https://midnight.network). Contributors are rewarded through a four-layer circular economy — airtime, farm inputs, community cash pools, and M-Pesa — that generates real value from Day 1 without requiring Daraja production credentials or an M-Pesa float.
+The Fastify REST API that powers the Dira platform. Handles all authentication, data ingestion, AI crop verification, atmospheric triangulation, the four-layer circular economy payment system, Telegram bot notifications, and the Midnight blockchain anchoring service.
 
 ---
 
-## This Repository
+## What this repository contains
 
-`dira-api` is the **Fastify 4 backend API**. It handles authentication, data ingestion, AI verification, the Climate Token ledger, all four circular economy payment layers, and the Midnight batch anchor pipeline.
-
-**Tech stack:**
-- Fastify 4 (TypeScript)
-- PostgreSQL 16 + PostGIS (geographic data)
-- Redis 7 (job queues, caching)
-- BullMQ (async AI verification jobs)
-- Sharp (crop photo colour analysis)
-- PlantNet API (plant species identification)
-- Open-Meteo (free atmospheric reference data)
-- Africa's Talking (airtime disbursement — Day 1)
-- Safaricom Daraja B2C (M-Pesa — Month 3–4)
-- Midnight SDK (ZK batch anchoring — Month 4–5)
+| Path | Purpose |
+|---|---|
+| `/src/routes/` | One file per feature module |
+| `/src/services/` | Business logic — token, airtime, voucher, circle, payment, AI, triangulation, Midnight, notification |
+| `/src/jobs/` | BullMQ job definitions and workers |
+| `/src/db/` | PostgreSQL plugin, 15 migration files, migration runner |
+| `/src/plugins/` | Fastify plugins — database, JWT auth, rate limiting |
+| `/src/middleware/` | Global error handler, log sanitiser |
+| `/src/config/env.ts` | Zod environment variable validation — server refuses to start if any required variable is missing |
+| `/src/scripts/` | CLI tools — `create-admin.ts` |
 
 ---
 
-## Repository Structure
+## Tech stack
 
-```
-dira-api/
-├── src/
-│   ├── routes/              # One file per feature module
-│   │   ├── auth.ts          # Telegram initData verification, JWT issuance
-│   │   ├── farmers.ts       # Crop photo submission, health reports
-│   │   ├── agents.ts        # Atmospheric sync, coverage, leaderboard
-│   │   ├── tokens.ts        # Token balance, history, redemption routing
-│   │   ├── payments/
-│   │   │   ├── airtime.ts   # Africa's Talking airtime (Day 1)
-│   │   │   ├── vouchers.ts  # Farm input QR vouchers (Month 1)
-│   │   │   ├── circle.ts    # Dira Circle cash pools (Month 2)
-│   │   │   └── mpesa.ts     # Daraja B2C (Month 3–4, flag-gated)
-│   │   ├── admin.ts         # Internal admin dashboard routes
-│   │   └── public.ts        # Unauthenticated dashboard data endpoints
-│   ├── services/
-│   │   ├── tokenService.ts          # Atomic ledger operations
-│   │   ├── airtimeService.ts        # Africa's Talking integration
-│   │   ├── voucherService.ts        # HMAC-SHA256 QR voucher generation
-│   │   ├── diraCircleService.ts     # County cash pool aggregation
-│   │   ├── paymentService.ts        # Daraja B2C (flag-gated)
-│   │   ├── aiService.ts             # Crop photo verification pipeline
-│   │   ├── triangulationService.ts  # Atmospheric Open-Meteo cross-check
-│   │   └── midnightService.ts       # ZK batch anchor pipeline
-│   ├── jobs/
-│   │   ├── queues.ts                # BullMQ queue definitions
-│   │   ├── photoVerificationJob.ts  # Async crop photo AI pipeline
-│   │   ├── atmosphericJob.ts        # Async barometric triangulation
-│   │   ├── midnightAnchorJob.ts     # Weekly Midnight batch commit
-│   │   └── notificationJob.ts       # Telegram message delivery
-│   ├── db/
-│   │   ├── migrations/              # 15 SQL migration files
-│   │   └── migrate.ts               # Migration runner
-│   ├── plugins/
-│   │   ├── database.ts              # PostgreSQL connection pool plugin
-│   │   ├── auth.ts                  # JWT authenticate decorator
-│   │   └── redis.ts                 # Redis connection plugin
-│   ├── middleware/
-│   │   ├── errorHandler.ts          # Global error normalisation
-│   │   └── logSanitiser.ts          # Strips sensitive fields from logs
-│   └── config/
-│       └── env.ts                   # Zod schema — server refuses to start with missing vars
-├── Dockerfile
-└── .env.example
-```
+- **Framework:** Fastify 4 (TypeScript)
+- **Database:** PostgreSQL 16 + PostGIS (geographic queries)
+- **Cache / Queue:** Redis 7 + BullMQ
+- **File storage:** Cloudflare R2 (pre-signed upload URLs — server never handles raw photo data)
+- **AI — plant ID:** PlantNet API (free tier, no cost)
+- **AI — weather ref:** Open-Meteo API (free, no key required)
+- **AI — image analysis:** `sharp` (colour health scoring)
+- **Payment Layer 1:** Africa's Talking (airtime — Day 1, no float required)
+- **Payment Layer 2:** Farm input voucher QR codes (HMAC-SHA256 signed)
+- **Payment Layer 3:** Dira Circle (county-level community cash pool — one bank transfer per county per month)
+- **Payment Layer 4:** Safaricom Daraja B2C (M-Pesa — flag-gated behind `DARAJA_PRODUCTION_ACTIVE`)
+- **Blockchain:** Midnight (weekly batch anchoring via `DiraDataAnchor.compact`)
+- **Notifications:** Telegram Bot API
+- **Deployment:** Coolify on Hetzner, Dockerised
 
 ---
 
-## API Overview
-
-Full OpenAPI specification lives in [dira-docs](https://github.com/dira-africa/dira-docs). Key endpoints:
-
-### Authentication
-```
-POST /auth/telegram      Verify Telegram initData (HMAC-SHA256), issue JWT
-GET  /auth/me            Return current authenticated user profile
-```
-
-### Farmer Module
-```
-POST /crop-submissions/upload-url   Generate pre-signed R2 upload URL
-POST /crop-submissions              Submit photo metadata, dispatch AI job
-GET  /crop-submissions              Paginated submission history
-GET  /crop-submissions/:id          Single submission with full AI report
-```
-
-### Agent Module
-```
-POST /atmospheric/submit            Submit barometric reading, dispatch triangulation job
-GET  /atmospheric/sync-history      Today's syncs and streak count
-GET  /agents/leaderboard            Weekly county leaderboard (anonymised)
-GET  /public/coverage-map           GeoJSON heatmap (no personal data)
-```
-
-### Circular Economy — Token Redemption
-```
-GET  /tokens/balance                Current balance and KES equivalent
-GET  /tokens/history                Paginated earning and spending history
-POST /tokens/redeem/airtime         Africa's Talking airtime (Day 1, always active)
-POST /tokens/redeem/voucher         Farm input QR code generation (Month 1)
-POST /tokens/redeem/circle          Dira Circle cash pool request (Month 2)
-POST /tokens/redeem/mpesa           Daraja B2C payout (Month 3–4, flag-gated)
-POST /webhooks/daraja/result        Safaricom B2C result callback
-POST /webhooks/daraja/timeout       Safaricom B2C timeout callback
-POST /partner/voucher/scan          Agro-dealer QR scan endpoint
-```
-
-### Public Dashboard
-```
-GET  /public/stats                  Network statistics (Redis-cached, 60s)
-GET  /public/coverage-map           Data density GeoJSON (cached, 5min)
-GET  /public/activity-feed          Anonymised recent events (cached, 30s)
-GET  /public/quality-metrics        AI verification confidence rates (cached, 1h)
-```
-
----
-
-## The Circular Economy Payment Architecture
-
-Four independent payment layers. Each layer requires progressively more financial infrastructure. Each layer's failure is isolated — AT downtime does not affect vouchers; voucher reconciliation issues do not affect Dira Circle.
-
-```
-DARAJA_PRODUCTION_ACTIVE=false  →  M-Pesa B2C routes return 503 (expected behaviour)
-VOUCHERS_ACTIVE=false           →  Voucher routes return 503 (expected behaviour)
-DIRA_CIRCLE_ACTIVE=false        →  Circle routes return 503 (expected behaviour)
-AT_API_KEY set                  →  Airtime routes always active (Day 1)
-```
-
-The `DARAJA_PRODUCTION_ACTIVE` flag must only be set to `true` when **both** conditions are confirmed:
-1. Daraja production credentials approved by Safaricom in writing
-2. First B2B API revenue received (provides the M-Pesa float)
-
----
-
-## Database Migrations
-
-Run migrations before starting the server:
-
-```bash
-npm run migrate
-```
-
-Migrations are idempotent — safe to run multiple times. The migration runner tracks completed migrations in a `migrations` table and only runs new files.
-
-**15 migrations total:**
-- `001–010`: Core platform (users, farmers, agents, atmospheric, crop photos, tokens, payments, API clients, audit, midnight)
-- `011–012`: Midnight anchor and certificate tables
-- `013`: Voucher redemptions and agro-dealer reconciliation (circular economy)
-- `014`: Dira Circle distributions and county coordinators (circular economy)
-- `015`: Agro-dealer management and MOU records (circular economy)
-
----
-
-## Local Development
+## Quick start
 
 ### Prerequisites
 
-```bash
-node --version   # 20 LTS required
-docker --version # For PostgreSQL + Redis containers
-```
+- Node.js ≥ 20.x
+- PostgreSQL 16 with PostGIS extension
+- Redis 7
 
-### Setup
+### Install
 
 ```bash
 git clone https://github.com/dira-africa/dira-api.git
 cd dira-api
-
-# Start PostgreSQL + Redis via Docker
-docker compose up -d
-
-# Install dependencies
 npm install
-
-# Configure environment
 cp .env.example .env
-# Fill in your values — especially AT_API_KEY and AT_USERNAME for airtime testing
-
-# Run migrations
-npm run migrate
-
-# Start development server
-npm run dev
+# Fill in your values — see .env.example for descriptions
 ```
 
-API runs at `http://localhost:3001`. Health check: `http://localhost:3001/health`
+### Run database migrations
 
-### Environment Variables
+```bash
+npm run migrate
+# Runs all 15 migrations in order.
+# Idempotent — safe to run multiple times.
+```
 
-The server uses Zod to validate all environment variables at startup. Missing or malformed variables cause the server to refuse to start with a clear error message.
+### Run locally
 
-See `.env.example` for the complete list with descriptions. Security-critical variables:
+```bash
+npm run dev
+# API runs on http://localhost:3001
+# Health check: http://localhost:3001/health
+```
 
-| Variable | Notes |
-|---|---|
-| `VOUCHER_SIGNING_SECRET` | Minimum 32 characters. Rotate immediately if compromised. |
-| `DARAJA_PRODUCTION_ACTIVE` | Defaults to `false`. Two-trigger activation only. |
-| `JWT_SECRET` | Minimum 64 characters. Different from any Midnight private key. |
+### Verify setup
+
+```bash
+# TypeScript — must pass with zero errors
+npx tsc --noEmit
+
+# Lint
+npm run lint
+
+# Tests
+npm test
+
+# Security audit — no critical or high vulnerabilities
+npm audit
+```
+
+### Create an admin account
+
+Admin accounts are created via CLI only — never via the API:
+
+```bash
+npx ts-node src/scripts/create-admin.ts
+# Prompts for email and password (minimum 20 characters)
+# Password is hashed with bcrypt cost factor 12
+```
 
 ---
 
-## Security
+## API overview
 
-- All SQL uses parameterised queries — zero string interpolation
-- Phone numbers encrypted at rest using `pgcrypto`
-- API keys stored as SHA-256 hashes — never plaintext
-- Voucher QR codes signed with HMAC-SHA256 and verified with `crypto.timingSafeEqual`
-- Daraja callbacks validated against Safaricom IP allowlist
-- Fastify logger configured to redact: `Authorization` headers, phone numbers, `initData`, any field named `secret`, `token`, or `key`
-- Rate limits: 100 req/min global, 10/min on auth, 3/hour on redemption, 4/day on atmospheric sync
+Full OpenAPI 3.0 specification lives in [`dira-docs`](https://github.com/dira-africa/dira-docs).
 
-Report security vulnerabilities to: **security@dira.africa**
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/health` | None | Server health check |
+| `POST` | `/auth/telegram` | None | Telegram Mini App authentication (HMAC-SHA256 verified) |
+| `GET` | `/auth/me` | JWT | Current user profile |
+| `POST` | `/farmers/profile` | JWT | Create/update farmer profile |
+| `POST` | `/crop-submissions/upload-url` | JWT | Get pre-signed R2 upload URL |
+| `POST` | `/crop-submissions` | JWT | Submit crop photo metadata |
+| `GET` | `/farmers/submissions` | JWT | Paginated submission history |
+| `POST` | `/agents/profile` | JWT | Create/update Data Agent profile |
+| `POST` | `/atmospheric/submit` | JWT | Submit barometric reading (validated: 870–1084 hPa, Kenya bounds) |
+| `GET` | `/tokens/balance` | JWT | Current token balance and KES equivalents |
+| `GET` | `/tokens/history` | JWT | Paginated token transaction history |
+| `POST` | `/tokens/redeem/airtime` | JWT | Redeem tokens for Africa's Talking airtime |
+| `POST` | `/tokens/redeem/voucher` | JWT | Generate farm input voucher QR code |
+| `POST` | `/tokens/redeem/circle` | JWT | Register for Dira Circle cash distribution |
+| `POST` | `/tokens/redeem/mpesa` | JWT | M-Pesa B2C redemption (returns 503 if `DARAJA_PRODUCTION_ACTIVE != true`) |
+| `POST` | `/partner/voucher/scan` | Dealer token | Agro-dealer scans a farmer voucher QR |
+| `GET` | `/public/stats` | None | Aggregated network statistics (Redis cached) |
+| `GET` | `/public/coverage-map` | None | GeoJSON heatmap — no individual user data |
+| `POST` | `/webhooks/daraja/result` | IP allowlist | Safaricom B2C payment callback |
+
+---
+
+## Database schema
+
+The database uses 15 sequential migration files:
+
+| Range | Tables |
+|---|---|
+| 001–010 | Core platform: extensions, users, farms, agent\_profiles, atmospheric\_readings, crop\_submissions, token\_ledger, api\_clients, audit\_log, redemption\_requests |
+| 011–012 | Midnight: midnight\_anchors, midnight\_certificates |
+| 013–015 | Circular economy: agro\_dealers, voucher\_redemptions, agro\_dealer\_reconciliations, circle\_coordinators, dira\_circle\_distributions, dealer\_product\_categories |
+
+All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table has a database-level `CHECK (balance_after >= 0)` constraint — negative balances cannot exist even if application code has a bug.
+
+---
+
+## Security architecture
+
+| Layer | Implementation |
+|---|---|
+| Authentication | Telegram HMAC-SHA256 verified `initData` → JWT (7 days). All comparisons use `crypto.timingSafeEqual()`. |
+| Authorisation | Fastify `authenticate` and `requireRole` decorators on all protected routes |
+| Rate limiting | Per-endpoint: 10/min on auth, 4/day on atmospheric sync, 3/hour on redemptions |
+| SQL injection | Parameterised queries throughout. Zero string concatenation in SQL. |
+| File uploads | Pre-signed R2 URLs. Server never handles raw file data. Magic byte validation on scan. |
+| Phone numbers | Encrypted at rest with pgcrypto `pgp_sym_encrypt`. Key in environment variable only. |
+| Daraja callbacks | IP allowlist — only Safaricom's documented IP ranges are accepted |
+| Voucher QR codes | HMAC-SHA256 signed with `VOUCHER_SIGNING_SECRET`. Timing-safe comparison on scan. One-time use enforced at database level. |
+| M-Pesa flag gate | `DARAJA_PRODUCTION_ACTIVE` environment variable — must be `false` in all development and staging environments |
+| Logging | Fastify redacts `Authorization`, `phone_number`, `initData`, and any field named `token`, `secret`, or `key` |
+| Secrets | Validated at startup by Zod — server refuses to start with any missing or malformed required variable |
+
+---
+
+## Environment variables
+
+Key variables — see `.env.example` for the complete list:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DARAJA_PRODUCTION_ACTIVE` | `false` | **Never set to `true` in dev.** Activates M-Pesa B2C. Two conditions required before activating in production. |
+| `VOUCHERS_ACTIVE` | `false` | Set `true` only when first agro-dealer MOU is signed |
+| `DIRA_CIRCLE_ACTIVE` | `false` | Set `true` only when first county coordinator is confirmed |
+| `VOUCHER_SIGNING_SECRET` | — | Minimum 32 characters. Server refuses to start if shorter. |
+| `PGCRYPTO_SYMMETRIC_KEY` | — | Used to encrypt phone numbers at rest. Never stored in DB. |
+| `MIDNIGHT_NETWORK` | `testnet` | Change to `mainnet` only after external contract audit passes |
 
 ---
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature-name`
-3. Write tests for any new service logic
-4. Run `npm run test` — all tests must pass
-5. Run `npm audit` — zero critical or high vulnerabilities
-6. Open a Pull Request against `main`
+We welcome contributions. Before you start, please read:
 
-All contributions are accepted under the Apache 2.0 license.
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — environment setup, branch strategy, commit standards, PR process, code standards, security checklist, and testing requirements
+- **[CODE\_OF\_CONDUCT.md](CODE_OF_CONDUCT.md)** — how we treat each other in this community
+
+PRs touching payment flows require two reviewer approvals. For security vulnerabilities, do **not** open a public issue. Email **security@dira.africa** instead.
 
 ---
 
-## Related Repositories
+## Community and support
 
-| Repository | Contents |
+| Channel | Purpose |
 |---|---|
-| [dira-core](https://github.com/dira-africa/dira-core) | Next.js 14 Telegram Mini App frontend |
-| [dira-docs](https://github.com/dira-africa/dira-docs) | OpenAPI specs, API documentation, impact reports |
-| [dira-contracts](https://github.com/dira-africa/dira-contracts) | Compact smart contracts for Midnight blockchain |
+| [GitHub Issues](https://github.com/dira-africa/dira-api/issues) | Bug reports and feature requests |
+| [GitHub Discussions](https://github.com/dira-africa/dira-api/discussions) | Architecture questions and ideas |
+| community@dira.africa | General inquiries |
+| security@dira.africa | Security vulnerabilities (private) |
+| conduct@dira.africa | Code of Conduct reports (private) |
 
 ---
 
-## License
+## Related repositories
 
-Copyright 2025 Dira Africa
+| Repository | Description |
+|---|---|
+| [`dira-core`](https://github.com/dira-africa/dira-core) | Telegram Mini App frontend |
+| [`dira-docs`](https://github.com/dira-africa/dira-docs) | OpenAPI specs, API documentation, reviewer guide |
+| [`dira-contracts`](https://github.com/dira-africa/dira-contracts) | Compact smart contracts for Midnight blockchain |
 
-Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+---
 
-The code is a gift to the world. The data, verified on Midnight, is the moat.
+## Licence
+
+Apache 2.0 — see [LICENSE](LICENSE).
+
+*Dira Africa Limited, 2026.*
