@@ -196,4 +196,4 @@ For answers to common questions about this Code of Conduct, see the [FAQ](https:
 
 *This Code of Conduct is effective from the date of the first public commit to any Dira Africa GitHub repository and applies to all contributions thereafter.*
 
-*Dira Africa Limited, 2025–2026. Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
+*Dira Africa Limited, 2026. Licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).*
