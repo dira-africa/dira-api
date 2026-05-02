@@ -782,4 +782,4 @@ Thank you for contributing.
 
 ---
 
-*This CONTRIBUTING.md is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Dira Africa Limited, 2025–2026.*
+*This CONTRIBUTING.md is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Dira Africa Limited, 2026.*
