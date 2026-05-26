@@ -191,7 +191,7 @@ We welcome contributions. Before you start, please read:
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — environment setup, branch strategy, commit standards, PR process, code standards, security checklist, and testing requirements
 - **[CODE\_OF\_CONDUCT.md](CODE_OF_CONDUCT.md)** — how we treat each other in this community
 
-PRs touching payment flows require two reviewer approvals. For security vulnerabilities, do **not** open a public issue. Email **security@dira.africa** instead.
+PRs touching payment flows require two reviewer approvals. For security vulnerabilities, do **not** open a public issue. Email **security@diraafrica.org** instead.
 
 ---
 
@@ -201,9 +201,9 @@ PRs touching payment flows require two reviewer approvals. For security vulnerab
 |---|---|
 | [GitHub Issues](https://github.com/dira-africa/dira-api/issues) | Bug reports and feature requests |
 | [GitHub Discussions](https://github.com/dira-africa/dira-api/discussions) | Architecture questions and ideas |
-| community@dira.africa | General inquiries |
-| security@dira.africa | Security vulnerabilities (private) |
-| conduct@dira.africa | Code of Conduct reports (private) |
+| community@diraafrica.org | General inquiries |
+| security@diraafrica.org | Security vulnerabilities (private) |
+| conduct@diraafrica.org | Code of Conduct reports (private) |
 
 ---
 
