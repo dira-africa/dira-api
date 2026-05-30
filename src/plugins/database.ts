@@ -16,8 +16,9 @@ const databasePlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     client.release();
     fastify.log.info("Database connection handshake successful.");
   } catch (err: any) {
-    fastify.log.error(`Database connection error: ${err.message}`);
-    throw new Error(`Failed to connect to the database at startup: ${err.message}`);
+    const errMsg = err.message || err.code || String(err);
+    fastify.log.error(`Database connection error: ${errMsg}`);
+    throw new Error(`Failed to connect to the database at startup: ${errMsg}`);
   }
 
   // Decorate Fastify instance with 'db'
