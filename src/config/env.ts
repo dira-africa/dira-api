@@ -21,6 +21,12 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  TELEGRAM_BOT_TOKEN: z
+    .string()
+    .default("123456789:placeholder_bot_token"),
+  PGCRYPTO_SYMMETRIC_KEY: z
+    .string()
+    .default("SuperSecureDiraSecretPassphrase"),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -9,6 +9,7 @@ import rateLimit from "@fastify/rate-limit";
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import databasePlugin from "./plugins/database";
+import authPlugin from "./plugins/auth";
 
 // Import routes
 import publicRoutes from "./routes/public";
@@ -67,6 +68,9 @@ async function main() {
     await server.register(jwt, {
       secret: env.JWT_SECRET,
     });
+
+    // 4.5. Register Custom Auth Decorators Plugin
+    await server.register(authPlugin);
 
     // 5. Register Multipart plugin for file uploads
     await server.register(multipart, {
