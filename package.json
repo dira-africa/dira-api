@@ -1,0 +1,38 @@
+{
+  "name": "dira-api",
+  "version": "1.0.0",
+  "description": "Fastify Backend API for the Dira Weather Sensing DePIN platform",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "keywords": [
+    "fastify",
+    "typescript",
+    "depin",
+    "dira",
+    "api"
+  ],
+  "author": "Blockchain & Climate Institute",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@fastify/cors": "^9.0.1",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/jwt": "^8.0.1",
+    "@fastify/multipart": "^8.3.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "bullmq": "^5.8.2",
+    "dotenv": "^16.4.5",
+    "fastify": "^4.28.0",
+    "pg": "^8.21.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.15.7",
+    "typescript": "^5.5.2"
+  }
+}

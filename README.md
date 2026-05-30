@@ -109,6 +109,15 @@ npx ts-node src/scripts/create-admin.ts
 
 ---
 
+## Docker Deployment (Coolify)
+
+The project includes a multi-stage **Dockerfile** optimized for containerized cloud deployment:
+1. **builder stage**: Installs development dependencies and transpiles TypeScript to `/dist`.
+2. **deps stage**: Installs only production node_modules.
+3. **runner stage**: Packages the `/dist` build with production node_modules under a lightweight alpine base image.
+
+---
+
 ## API overview
 
 Full OpenAPI 3.0 specification lives in [`dira-docs`](https://github.com/dira-africa/dira-docs).
@@ -143,9 +152,9 @@ The database uses 15 sequential migration files:
 
 | Range | Tables |
 |---|---|
-| 001–010 | Core platform: extensions, users, farms, agent\_profiles, atmospheric\_readings, crop\_submissions, token\_ledger, api\_clients, audit\_log, redemption\_requests |
-| 011–012 | Midnight: midnight\_anchors, midnight\_certificates |
-| 013–015 | Circular economy: agro\_dealers, voucher\_redemptions, agro\_dealer\_reconciliations, circle\_coordinators, dira\_circle\_distributions, dealer\_product\_categories |
+| 001–010 | Core platform: extensions, users, farms, agent_profiles, atmospheric_readings, crop_submissions, token_ledger, api_clients, audit_log, redemption_requests |
+| 011–012 | Midnight: midnight_anchors, midnight_certificates |
+| 013–015 | Circular economy: agro_dealers, voucher_redemptions, agro_dealer_reconciliations, circle_coordinators, dira_circle_distributions, dealer_product_categories |
 
 All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table has a database-level `CHECK (balance_after >= 0)` constraint — negative balances cannot exist even if application code has a bug.
 
@@ -189,7 +198,7 @@ Key variables — see `.env.example` for the complete list:
 We welcome contributions. Before you start, please read:
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — environment setup, branch strategy, commit standards, PR process, code standards, security checklist, and testing requirements
-- **[CODE\_OF\_CONDUCT.md](CODE_OF_CONDUCT.md)** — how we treat each other in this community
+- **[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)** — how we treat each other in this community
 
 PRs touching payment flows require two reviewer approvals. For security vulnerabilities, do **not** open a public issue. Email **security@diraafrica.org** instead.
 
