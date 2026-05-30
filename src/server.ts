@@ -8,6 +8,7 @@ import rateLimit from "@fastify/rate-limit";
 // Validate env variables first at startup
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
+import databasePlugin from "./plugins/database";
 
 // Import routes
 import publicRoutes from "./routes/public";
@@ -78,7 +79,10 @@ async function main() {
       },
     });
 
-    // 6. Register Global Error Handler
+    // 6. Register Database connection pool
+    await server.register(databasePlugin);
+
+    // 7. Register Global Error Handler
     server.setErrorHandler(errorHandler);
 
     // 7. Register Routes

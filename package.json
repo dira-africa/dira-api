@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "migrate": "ts-node src/db/migrate.ts"
   },
   "keywords": [
     "fastify",
@@ -26,12 +27,14 @@
     "bullmq": "^5.8.2",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.0",
+    "fastify-plugin": "^5.1.0",
     "pg": "^8.21.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20.14.9",
     "@types/pg": "^8.20.0",
+    "ts-node": "^10.9.2",
     "tsx": "^4.15.7",
     "typescript": "^5.5.2"
   }
