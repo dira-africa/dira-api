@@ -216,6 +216,72 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
   );
 
+  // PUT /auth/profile
+  fastify.put<{
+    Body: {
+      language?: "en" | "sw";
+      role?: "farmer" | "agent" | "admin";
+      fullName?: string;
+      county?: string;
+    };
+  }>(
+    "/profile",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const { language, role, fullName, county } = request.body;
+
+      try {
+        const userRes = await query("SELECT * FROM users WHERE id = $1", [userId]);
+        if (userRes.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "USER_NOT_FOUND", message: "User not found." }
+          });
+        }
+
+        const currentUser = userRes.rows[0];
+
+        const updatedLanguage = language || currentUser.language;
+        const updatedRole = role || currentUser.role;
+        const updatedFullName = fullName !== undefined ? fullName : currentUser.full_name;
+        const updatedCounty = county !== undefined ? county : currentUser.county;
+
+        const updateRes = await query(
+          `UPDATE users 
+           SET language = $1, role = $2, full_name = $3, county = $4, updated_at = CURRENT_TIMESTAMP 
+           WHERE id = $5 
+           RETURNING id, full_name, role, language, county`,
+          [updatedLanguage, updatedRole, updatedFullName, updatedCounty, userId]
+        );
+
+        const updatedUser = updateRes.rows[0];
+
+        const token = fastify.jwt.sign(
+          { id: updatedUser.id, role: updatedUser.role },
+          { expiresIn: "7d" }
+        );
+
+        return {
+          success: true,
+          token,
+          user: {
+            id: updatedUser.id,
+            name: updatedUser.full_name,
+            role: updatedUser.role,
+            language: updatedUser.language,
+            isNewUser: false
+          }
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to update profile." }
+        });
+      }
+    }
+  );
+
   // Stubs for standard authentication (kept alongside Telegram authentication)
   fastify.post(
     "/login",
@@ -247,3 +313,4 @@ export default async function authRoutes(fastify: FastifyInstance) {
     }
   );
 }
+
