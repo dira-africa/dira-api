@@ -190,6 +190,13 @@ export default async function authRoutes(fastify: FastifyInstance) {
           missing_user_data: 400,
         };
 
+        const codeMap: Record<string, string> = {
+          missing_hash: "INVALID_TELEGRAM_AUTH",
+          signature_invalid: "INVALID_TELEGRAM_AUTH",
+          stale_token: "STALE_TOKEN",
+          missing_user_data: "INVALID_TELEGRAM_AUTH",
+        };
+
         const status = statusMap[reason] || 401;
         const msgMap: Record<string, string> = {
           missing_hash: "Missing hash parameter.",
@@ -201,7 +208,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.status(status).send({
           success: false,
           error: {
-            code: status === 400 ? "BAD_REQUEST" : "UNAUTHORIZED",
+            code: codeMap[reason] || "UNAUTHORIZED",
             message: msgMap[reason] || "Authentication failed.",
           },
         });

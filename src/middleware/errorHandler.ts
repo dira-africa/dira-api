@@ -1,4 +1,5 @@
 import { FastifyError, FastifyReply, FastifyRequest } from "fastify";
+import { query } from "../db/query";
 
 export function errorHandler(
   error: FastifyError,
@@ -19,6 +20,21 @@ export function errorHandler(
   } else if (statusCode === 429) {
     code = "TOO_MANY_REQUESTS";
     message = "Rate limit exceeded. Please try again shortly.";
+    if (request.url.includes("/auth/telegram")) {
+      query(
+        `INSERT INTO audit_log (action, entity_type, ip_address, user_agent, metadata)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          "auth_telegram_failure",
+          "users",
+          request.ip,
+          request.headers["user-agent"] || null,
+          JSON.stringify({ reason: "rate_limited" }),
+        ]
+      ).catch((err) => {
+        request.log.error("Failed to log 429 rate limit to audit_log:", err);
+      });
+    }
   } else if (statusCode === 401) {
     code = "UNAUTHORIZED";
     message = "Authentication token is missing or invalid.";
