@@ -27,6 +27,21 @@ const envSchema = z.object({
   PGCRYPTO_SYMMETRIC_KEY: z
     .string()
     .default("SuperSecureDiraSecretPassphrase"),
+  AFRICAS_TALKING_API_KEY: z.string().optional(),
+  AFRICAS_TALKING_USERNAME: z.string().default("sandbox"),
+  DARAJA_CONSUMER_KEY: z.string().optional(),
+  DARAJA_CONSUMER_SECRET: z.string().optional(),
+  DARAJA_INITIATOR_NAME: z.string().optional(),
+  DARAJA_SECURITY_CREDENTIAL: z.string().optional(),
+  DARAJA_SHORTCODE: z.string().optional(),
+  VOUCHER_SIGNING_SECRET: z
+    .string()
+    .default("SuperSecureVoucherSigningSecretPassphraseLength32"),
+  MIDNIGHT_PROOF_SERVER_URL: z.string().optional(),
+  MIDNIGHT_INDEXER_URL: z.string().optional(),
+  MIDNIGHT_WALLET_SEED: z.string().optional(),
+  MIDNIGHT_ANCHOR_CONTRACT_ADDRESS: z.string().optional(),
+  MIDNIGHT_CERTIFICATE_CONTRACT_ADDRESS: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

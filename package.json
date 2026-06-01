@@ -7,7 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "migrate": "ts-node src/db/migrate.ts"
+    "migrate": "ts-node src/db/migrate.ts",
+    "test:midnight": "tsx src/test_midnight_jobs.ts"
   },
   "keywords": [
     "fastify",
@@ -28,7 +29,9 @@
     "dotenv": "^16.4.5",
     "fastify": "^4.28.0",
     "fastify-plugin": "^5.1.0",
+    "ioredis": "^5.11.0",
     "pg": "^8.21.0",
+    "sharp": "^0.34.5",
     "zod": "^3.23.8"
   },
   "devDependencies": {

@@ -12,6 +12,84 @@ interface FarmerProfileBody {
 }
 
 export default async function farmersRoutes(fastify: FastifyInstance) {
+  fastify.get(
+    "/submissions",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const queryParams = request.query as { page?: string; limit?: string };
+      const page = Math.max(1, Number(queryParams.page) || 1);
+      const limit = Math.max(1, Number(queryParams.limit) || 10);
+      const offset = (page - 1) * limit;
+
+      try {
+        const countRes = await query(
+          "SELECT COUNT(*) AS count FROM crop_submissions WHERE user_id = $1",
+          [userId]
+        );
+        const totalCount = Number(countRes.rows[0].count);
+        const totalPages = Math.ceil(totalCount / limit);
+
+        const submissionsRes = await query(
+          `SELECT id, photo_url, crop_type, growth_stage, verification_status, ai_health_score, ai_confidence, submitted_at, rejection_reason, ai_report_en, ai_report_sw
+           FROM crop_submissions
+           WHERE user_id = $1
+           ORDER BY submitted_at DESC
+           LIMIT $2 OFFSET $3`,
+          [userId, limit, offset]
+        );
+
+        return {
+          success: true,
+          submissions: submissionsRes.rows,
+          totalCount,
+          page,
+          totalPages
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch submissions." }
+        });
+      }
+    }
+  );
+
+  fastify.get<{ Params: { id: string } }>(
+    "/submissions/:id",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const submissionId = request.params.id;
+
+      try {
+        const res = await query(
+          `SELECT id, photo_url, crop_type, growth_stage, verification_status, ai_health_score, ai_confidence, ai_report_en, ai_report_sw, ai_detected_issues, ST_X(location::geometry) AS longitude, ST_Y(location::geometry) AS latitude, rejection_reason, submitted_at, verified_at
+           FROM crop_submissions
+           WHERE id = $1 AND user_id = $2`,
+          [submissionId, userId]
+        );
+
+        if (res.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Crop submission not found." }
+          });
+        }
+
+        return {
+          success: true,
+          submission: res.rows[0]
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch crop submission details." }
+        });
+      }
+    }
+  );
+
   fastify.get("/profile", async (request, reply) => {
     return { id: "farmer_1", name: "John Doe", verified: true };
   });

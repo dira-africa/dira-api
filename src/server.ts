@@ -4,12 +4,15 @@ import helmet from "@fastify/helmet";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
+import fs from "fs";
+import path from "path";
 
 // Validate env variables first at startup
 import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import databasePlugin from "./plugins/database";
 import authPlugin from "./plugins/auth";
+import jobsPlugin from "./plugins/jobs";
 
 // Import routes
 import publicRoutes from "./routes/public";
@@ -20,6 +23,8 @@ import tokensRoutes from "./routes/tokens";
 import adminRoutes from "./routes/admin";
 import partnerRoutes from "./routes/partner";
 import webhooksRoutes from "./routes/webhooks";
+import cropSubmissionsRoutes from "./routes/cropSubmissions";
+import atmosphericRoutes from "./routes/atmospheric";
 
 // Payments subroutes
 import airtimeRoutes from "./routes/payments/airtime";
@@ -86,6 +91,9 @@ async function main() {
     // 6. Register Database connection pool
     await server.register(databasePlugin);
 
+    // 6.5. Register background jobs (BullMQ)
+    await server.register(jobsPlugin);
+
     // 7. Register Global Error Handler
     server.setErrorHandler(errorHandler);
 
@@ -98,12 +106,24 @@ async function main() {
     await server.register(adminRoutes, { prefix: "/api/admin" });
     await server.register(partnerRoutes, { prefix: "/api/partner" });
     await server.register(webhooksRoutes, { prefix: "/api/webhooks" });
+    await server.register(cropSubmissionsRoutes, { prefix: "/api/crop-submissions" });
+    await server.register(atmosphericRoutes, { prefix: "/api/atmospheric" });
 
     // Payments subroutes
     await server.register(airtimeRoutes, { prefix: "/api/payments/airtime" });
     await server.register(vouchersRoutes, { prefix: "/api/payments/vouchers" });
     await server.register(circleRoutes, { prefix: "/api/payments/circle" });
     await server.register(mpesaRoutes, { prefix: "/api/payments/mpesa" });
+
+    // Local static file serving fallback for uploads
+    server.get("/uploads/:filename", async (request, reply) => {
+      const filePath = path.join(__dirname, "../public/uploads", (request.params as any).filename);
+      if (!fs.existsSync(filePath)) {
+        return reply.status(404).send({ error: "File not found" });
+      }
+      const stream = fs.createReadStream(filePath);
+      return reply.type("image/jpeg").send(stream);
+    });
 
     // Start server
     await server.listen({ port: env.PORT, host: env.HOST });
