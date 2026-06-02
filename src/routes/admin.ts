@@ -17,6 +17,8 @@
 import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { midnightService } from "../services/midnightService";
+import { diraCircleService } from "../services/diraCircleService";
+import { env } from "../config/env";
 import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
@@ -195,6 +197,116 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve job statistics." }
+        });
+      }
+    }
+  );
+
+  // 6. POST /api/admin/circle/coordinators - Appoint county coordinator
+  fastify.post<{ Body: { agentId?: string; agent_id?: string; countyId?: string; county_id?: string; mpesaNumber?: string; mpesa_number?: string } }>(
+    "/circle/coordinators",
+    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
+    async (request, reply) => {
+      const agentId = request.body.agentId ?? request.body.agent_id;
+      const countyId = request.body.countyId ?? request.body.county_id;
+      const mpesaNumber = request.body.mpesaNumber ?? request.body.mpesa_number;
+
+      if (!agentId || !countyId || !mpesaNumber) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "agentId, countyId, and mpesaNumber are required." }
+        });
+      }
+
+      try {
+        const userRes = await query("SELECT role FROM users WHERE id = $1", [agentId]);
+        if (userRes.rows.length === 0) {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "USER_NOT_FOUND", message: "Specified agent user does not exist." }
+          });
+        }
+
+        await query(
+          `INSERT INTO circle_coordinators (agent_id, county_id, mpesa_number, active_from, active)
+           VALUES ($1, $2, pgp_sym_encrypt($3, $4), CURRENT_DATE, TRUE)
+           ON CONFLICT (county_id) DO UPDATE 
+           SET agent_id = EXCLUDED.agent_id, 
+               mpesa_number = EXCLUDED.mpesa_number, 
+               active = TRUE`,
+          [agentId, countyId, mpesaNumber, env.PGCRYPTO_SYMMETRIC_KEY]
+        );
+
+        return {
+          success: true,
+          message: `Successfully appointed coordinator for county: ${countyId}`
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to appoint coordinator." }
+        });
+      }
+    }
+  );
+
+  // 7. GET /api/admin/circle/distributions - List pending and completed distributions
+  fastify.get(
+    "/circle/distributions",
+    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          `SELECT d.*, u.full_name AS coordinator_name
+           FROM dira_circle_distributions d
+           JOIN circle_coordinators c ON d.coordinator_id = c.id
+           JOIN users u ON c.agent_id = u.id
+           ORDER BY d.period_month DESC`
+        );
+        return {
+          success: true,
+          distributions: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve distributions." }
+        });
+      }
+    }
+  );
+
+  // 8. PATCH /api/admin/circle/distributions/:id/confirm - Mark distribution as paid
+  fastify.patch<{ Params: { id: string }; Body: { transferReference: string } }>(
+    "/circle/distributions/:id/confirm",
+    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
+    async (request, reply) => {
+      const { id } = request.params;
+      const { transferReference } = request.body;
+
+      if (!transferReference) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "transferReference is required." }
+        });
+      }
+
+      try {
+        await diraCircleService.confirmDistribution(id, transferReference);
+        return {
+          success: true,
+          message: "Distribution confirmed and paid successfully."
+        };
+      } catch (err: any) {
+        if (err.message === "DISTRIBUTION_NOT_FOUND") {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Dira Circle distribution not found." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to confirm distribution." }
         });
       }
     }

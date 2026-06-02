@@ -21,6 +21,10 @@ const envSchema = z.object({
     .string()
     .default("false")
     .transform((val) => val === "true" || val === "1"),
+  DIRA_CIRCLE_ACTIVE: z
+    .string()
+    .default("true")
+    .transform((val) => val === "true" || val === "1"),
   TELEGRAM_BOT_TOKEN: z
     .string()
     .default("123456789:placeholder_bot_token"),

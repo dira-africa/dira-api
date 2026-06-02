@@ -19,6 +19,7 @@ import { query } from "../db/query";
 import { tokenService } from "../services/tokenService";
 import { airtimeService } from "../services/airtimeService";
 import { voucherService } from "../services/voucherService";
+import { diraCircleService } from "../services/diraCircleService";
 import { env } from "../config/env";
 
 interface RedeemAirtimeRouteBody {
@@ -375,6 +376,118 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch agro-dealers." }
+        });
+      }
+    }
+  );
+
+  // 7. POST /api/tokens/redeem/circle - Redeem Climate Tokens for Dira Circle Cash Pool
+  fastify.post<{ Body: { token_amount?: number; tokenAmount?: number } }>(
+    "/redeem/circle",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      if (!env.DIRA_CIRCLE_ACTIVE) {
+        return reply.status(503).send({
+          success: false,
+          error: { code: "SERVICE_UNAVAILABLE", message: "Dira Circle redemption is currently disabled in this environment." }
+        });
+      }
+
+      const userId = request.user.id;
+      const tokenAmount = request.body.token_amount ?? request.body.tokenAmount;
+
+      if (tokenAmount === undefined) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "tokenAmount is required." }
+        });
+      }
+
+      try {
+        const result = await diraCircleService.registerCircleRedemption(userId, tokenAmount);
+        return result;
+      } catch (err: any) {
+        if (err.message === "BELOW_MINIMUM_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BELOW_MINIMUM_TOKENS", message: "Minimum redemption is 100 Climate Tokens." }
+          });
+        }
+        if (err.message === "NO_ACTIVE_COORDINATOR") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "NO_ACTIVE_COORDINATOR", message: "No active Dira Circle coordinator appointed for your county." }
+          });
+        }
+        if (err.message === "INSUFFICIENT_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: "Insufficient tokens for redemption." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "An unexpected error occurred." }
+        });
+      }
+    }
+  );
+
+  // 8. GET /api/tokens/redeem/circle/status - Retrieve circle redemption status & coordinator info
+  fastify.get(
+    "/redeem/circle/status",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+
+      try {
+        const userRes = await query("SELECT county FROM users WHERE id = $1", [userId]);
+        const county = userRes.rows[0]?.county;
+
+        let coordinator = null;
+        if (county) {
+          const coordRes = await query(
+            `SELECT u.full_name AS name, pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS phone
+             FROM circle_coordinators cc
+             JOIN users u ON cc.agent_id = u.id
+             WHERE cc.county_id = $2 AND cc.active = TRUE`,
+            [env.PGCRYPTO_SYMMETRIC_KEY, county]
+          );
+          if (coordRes.rows.length > 0) {
+            coordinator = {
+              name: coordRes.rows[0].name,
+              mpesaNumber: coordRes.rows[0].phone
+            };
+          }
+        }
+
+        const requestRes = await query(
+          `SELECT status, amount_kes::float AS amount_kes, tokens_spent, initiated_at, completed_at, mpesa_receipt
+           FROM redemption_requests
+           WHERE user_id = $1 AND redemption_type = 'circle'
+           ORDER BY initiated_at DESC LIMIT 1`,
+          [userId]
+        );
+
+        const lastRequest = requestRes.rows.length > 0 ? {
+          status: requestRes.rows[0].status,
+          amountKes: requestRes.rows[0].amount_kes,
+          tokensSpent: requestRes.rows[0].tokens_spent,
+          initiatedAt: requestRes.rows[0].initiated_at,
+          completedAt: requestRes.rows[0].completed_at,
+          mpesaReceipt: requestRes.rows[0].mpesa_receipt
+        } : null;
+
+        return {
+          success: true,
+          county,
+          coordinator,
+          lastRequest
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve circle status." }
         });
       }
     }
