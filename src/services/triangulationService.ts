@@ -382,6 +382,10 @@ export class TriangulationService {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      
+      // Lock the user row first to prevent deadlocks with other transactions (like tokenService)
+      await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userId]);
+
       const balanceRes = await client.query(
         "SELECT balance_after FROM token_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
         [userId]
