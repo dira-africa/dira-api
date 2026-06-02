@@ -18,6 +18,7 @@ import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { voucherService } from "../services/voucherService";
 import { env } from "../config/env";
+import { createHash } from "crypto";
 
 interface ValidateVoucherBody {
   voucherCode: string;
@@ -158,6 +159,104 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
           error: { code: "SERVER_ERROR", message: err.message || "Failed to process voucher redemption." }
         });
       }
+    }
+  );
+
+  // Helper to verify dealer API token
+  async function verifyDealerApiToken(request: any, reply: any) {
+    const authHeader = request.headers.authorization || request.headers["x-api-key"] || "";
+    let token = "";
+    if (authHeader.startsWith("Bearer ")) {
+      token = authHeader.substring(7);
+    } else {
+      token = authHeader;
+    }
+
+    if (!token) {
+      return reply.status(401).send({
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "API key token is missing." }
+      });
+    }
+
+    const keyHash = createHash("sha256").update(token).digest("hex");
+    const res = await query(
+      "SELECT id, role, active FROM api_clients WHERE key_hash = $1 AND active = TRUE",
+      [keyHash]
+    );
+
+    if (res.rows.length === 0 || (res.rows[0].role !== "dealer" && res.rows[0].role !== "admin")) {
+      return reply.status(401).send({
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "Invalid or unauthorized API token." }
+      });
+    }
+
+    request.apiClient = res.rows[0];
+  }
+
+  interface ScanVoucherBody {
+    qrPayload: string;
+    agroDealerId?: string;
+  }
+
+  // 3. POST /api/partner/voucher/scan - Agro-dealer scans farmer's QR
+  fastify.post<{ Body: ScanVoucherBody }>(
+    "/voucher/scan",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const userRole = request.user.role;
+      const { qrPayload, agroDealerId } = request.body;
+
+      if (!qrPayload) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "qrPayload is required." }
+        });
+      }
+
+      let dealerId = agroDealerId || null;
+      if (!dealerId) {
+        dealerId = await getLinkedDealerId(userId);
+      }
+
+      if (!dealerId && userRole !== "admin") {
+        return reply.status(403).send({
+          success: false,
+          error: { code: "FORBIDDEN", message: "You do not have permission to scan vouchers." }
+        });
+      }
+
+      try {
+        const result = await voucherService.scanVoucher(qrPayload, dealerId!);
+        return result;
+      } catch (err: any) {
+        const code = err.message || "REDEMPTION_FAILED";
+        const status = (code === "VOUCHER_ALREADY_REDEEMED" || code === "VOUCHER_EXPIRED" || code === "INVALID_SIGNATURE") ? 400 : 500;
+        return reply.status(status).send({
+          success: false,
+          error: { code, message: err.message || "Failed to process voucher scan." }
+        });
+      }
+    }
+  );
+
+  // 4. GET /api/partner/voucher/scan - Dealer gets scanned voucher logs (requires API Token Auth)
+  fastify.get(
+    "/voucher/scan",
+    { preHandler: [verifyDealerApiToken] },
+    async (request, reply) => {
+      const res = await query(
+        `SELECT id, farmer_id, token_amount, kes_value, voucher_code, expires_at, scanned_at, status 
+         FROM voucher_redemptions 
+         WHERE status = 'redeemed' 
+         ORDER BY scanned_at DESC`
+      );
+      return {
+        success: true,
+        vouchers: res.rows
+      };
     }
   );
 }

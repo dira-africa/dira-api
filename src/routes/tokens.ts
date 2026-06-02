@@ -18,10 +18,17 @@ import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { tokenService } from "../services/tokenService";
 import { airtimeService } from "../services/airtimeService";
+import { voucherService } from "../services/voucherService";
+import { env } from "../config/env";
 
 interface RedeemAirtimeRouteBody {
   token_amount: number;
   phone_number: string;
+}
+
+interface RedeemVoucherRouteBody {
+  token_amount: number;
+  agro_dealer_id: string;
 }
 
 export default async function tokensRoutes(fastify: FastifyInstance) {
@@ -250,6 +257,124 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "An unexpected error occurred." }
+        });
+      }
+    }
+  );
+
+  // 5. POST /api/tokens/redeem/voucher - Redeem Climate Tokens for Farm Input Voucher
+  fastify.post<{ Body: RedeemVoucherRouteBody }>(
+    "/redeem/voucher",
+    {
+      onRequest: [fastify.authenticate, fastify.requireRole(["farmer"])],
+      schema: {
+        body: {
+          type: "object",
+          required: ["token_amount", "agro_dealer_id"],
+          properties: {
+            token_amount: { type: "integer", minimum: 50 },
+            agro_dealer_id: { type: "string", format: "uuid" }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const { token_amount, agro_dealer_id } = request.body;
+
+      // Manual validations for precise error codes
+      if (token_amount === undefined || token_amount < 50) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "BELOW_MINIMUM_TOKENS", message: "Minimum redemption is 50 Climate Tokens." }
+        });
+      }
+
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (!agro_dealer_id || !uuidRegex.test(agro_dealer_id)) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "DEALER_NOT_FOUND", message: "Active agro-dealer not found." }
+        });
+      }
+
+      try {
+        const result = await voucherService.generateVoucher(
+          userId,
+          token_amount,
+          agro_dealer_id
+        );
+
+        // Save general redemption request as completed (matching schema)
+        await query(
+          `INSERT INTO redemption_requests (user_id, tokens_spent, redemption_type, amount_kes, phone_number, status, completed_at)
+           VALUES ($1, $2, 'voucher', $3, pgp_sym_encrypt('Voucher Code: ' || $4, $5), 'completed', CURRENT_TIMESTAMP)`,
+          [userId, token_amount, result.kesValue, result.voucherCode, env.PGCRYPTO_SYMMETRIC_KEY]
+        );
+
+        return {
+          success: true,
+          qrDataUrl: result.qrDataUrl,
+          voucherCode: result.voucherCode,
+          kesValue: result.kesValue,
+          expiresAt: result.expiresAt
+        };
+      } catch (err: any) {
+        if (err.message === "BELOW_MINIMUM_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BELOW_MINIMUM_TOKENS", message: "Minimum redemption is 50 Climate Tokens." }
+          });
+        }
+        if (err.message === "DEALER_NOT_FOUND") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "DEALER_NOT_FOUND", message: "Active agro-dealer not found." }
+          });
+        }
+        if (err.message === "INSUFFICIENT_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: "Insufficient tokens for redemption." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "An unexpected error occurred." }
+        });
+      }
+    }
+  );
+
+  // 6. GET /api/tokens/redeem/voucher/dealers - Retrieve active agro-dealers with categories
+  fastify.get(
+    "/redeem/voucher/dealers",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          `SELECT ad.id, ad.dealer_name, ad.county_id, ad.dealer_logo_url, 
+                  COALESCE(array_agg(dpc.category_name) FILTER (WHERE dpc.is_active = TRUE), '{}') AS categories
+           FROM agro_dealers ad
+           LEFT JOIN dealer_product_categories dpc ON ad.id = dpc.dealer_id
+           WHERE ad.active = TRUE
+           GROUP BY ad.id, ad.dealer_name, ad.county_id, ad.dealer_logo_url
+           ORDER BY ad.dealer_name ASC`
+        );
+        return {
+          success: true,
+          dealers: res.rows.map(row => ({
+            id: row.id,
+            name: row.dealer_name,
+            county: row.county_id,
+            logoUrl: row.dealer_logo_url,
+            categories: row.categories
+          }))
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch agro-dealers." }
         });
       }
     }

@@ -50,54 +50,41 @@ export default async function vouchersRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        // 2. Validate dealer exists and is active
-        const dealerRes = await query(
-          "SELECT id, dealer_name FROM agro_dealers WHERE id = $1 AND active = TRUE",
-          [agroDealerId]
+        const voucherRes = await voucherService.generateVoucher(userId, tokenAmount, agroDealerId);
+
+        // 4. Save general redemption request as completed
+        await query(
+          `INSERT INTO redemption_requests (user_id, tokens_spent, redemption_type, amount_kes, phone_number, status, completed_at)
+           VALUES ($1, $2, 'voucher', $3, pgp_sym_encrypt('Voucher Code: ' || $4, 'SuperSecureDiraSecretPassphrase'), 'completed', CURRENT_TIMESTAMP)`,
+          [userId, tokenAmount, voucherRes.kesValue, voucherRes.voucherCode]
         );
-        if (dealerRes.rows.length === 0) {
+
+        return {
+          success: true,
+          code: voucherRes.voucherCode,
+          expiresAt: voucherRes.expiresAt,
+          qrHash: voucherRes.qrHash,
+          kesValue: voucherRes.kesValue
+        };
+      } catch (err: any) {
+        if (err.message === "BELOW_MINIMUM_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "MINIMUM_REDEMPTION", message: "Minimum redemption is 50 Climate Tokens for input vouchers." }
+          });
+        }
+        if (err.message === "DEALER_NOT_FOUND") {
           return reply.status(400).send({
             success: false,
             error: { code: "DEALER_NOT_FOUND", message: "Agro-dealer is not active or does not exist." }
           });
         }
-
-        const dealerName = dealerRes.rows[0].dealer_name;
-        const kesValue = tokenAmount * 1.0;
-
-        // 3. Deduct tokens from user's ledger (fails if balance goes negative)
-        try {
-          await tokenService.awardTokens(
-            userId,
-            -tokenAmount,
-            `Redeemed ${tokenAmount} tokens for farm input voucher (KES ${kesValue.toFixed(2)}) at ${dealerName}`,
-            "redeem_voucher"
-          );
-        } catch (err: any) {
+        if (err.message === "INSUFFICIENT_TOKENS") {
           return reply.status(400).send({
             success: false,
             error: { code: "INSUFFICIENT_BALANCE", message: "Insufficient token balance." }
           });
         }
-
-        // 4. Generate signed voucher and record it
-        const voucherRes = await voucherService.issueInputVoucher(userId, agroDealerId, tokenAmount);
-
-        // 5. Save general redemption request as completed
-        await query(
-          `INSERT INTO redemption_requests (user_id, tokens_spent, redemption_type, amount_kes, phone_number, status, completed_at)
-           VALUES ($1, $2, 'voucher', $3, pgp_sym_encrypt('Voucher Code: ' || $4, 'SuperSecureDiraSecretPassphrase'), 'completed', CURRENT_TIMESTAMP)`,
-          [userId, tokenAmount, kesValue, voucherRes.code]
-        );
-
-        return {
-          success: true,
-          code: voucherRes.code,
-          expiresAt: voucherRes.expiresAt,
-          qrHash: voucherRes.qrHash,
-          kesValue
-        };
-      } catch (err: any) {
         console.error("Voucher redemption route error:", err);
         return reply.status(500).send({
           success: false,
