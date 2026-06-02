@@ -87,6 +87,44 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       }
     );
 
+    // C. Sync reminders repeatable job (runs 4x daily: 7am, 12pm, 5pm, 9pm EAT)
+    const remindersRepeatable = await notificationsQueue.getRepeatableJobs();
+    for (const rJob of remindersRepeatable) {
+      if (rJob.name === "sync-reminders") {
+        await notificationsQueue.removeRepeatableByKey(rJob.key);
+      }
+    }
+    await notificationsQueue.add(
+      "sync-reminders",
+      {},
+      {
+        repeat: {
+          pattern: "0 7,12,17,21 * * *", // 7am, 12pm, 5pm, 9pm EAT
+          tz: "Africa/Nairobi"
+        },
+        jobId: "sync-reminders-job"
+      }
+    );
+
+    // D. Weekly summaries repeatable job (runs every Sunday at 7pm EAT)
+    const summariesRepeatable = await notificationsQueue.getRepeatableJobs();
+    for (const rJob of summariesRepeatable) {
+      if (rJob.name === "weekly-summaries") {
+        await notificationsQueue.removeRepeatableByKey(rJob.key);
+      }
+    }
+    await notificationsQueue.add(
+      "weekly-summaries",
+      {},
+      {
+        repeat: {
+          pattern: "0 19 * * 0", // Sunday at 7pm EAT
+          tz: "Africa/Nairobi"
+        },
+        jobId: "weekly-summaries-job"
+      }
+    );
+
     fastify.log.info("Repeatable job schedules registered successfully.");
   } catch (err: any) {
     fastify.log.error(`Failed to register job schedules: ${err.message}`);

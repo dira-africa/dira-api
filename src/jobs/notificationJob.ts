@@ -18,7 +18,17 @@ import { Job } from "bullmq";
 import { notificationService } from "../services/notificationService";
 
 export async function processNotification(job: Job) {
-  const { telegramId, message } = job.data;
+  if (job.name === "sync-reminders") {
+    await notificationService.sendSyncReminders();
+    return { success: true };
+  }
+
+  if (job.name === "weekly-summaries") {
+    await notificationService.sendWeeklySummaries();
+    return { success: true };
+  }
+
+  const { telegramId, message } = job.data || {};
   if (!telegramId || !message) {
     throw new Error("Missing telegramId or message in notification job data");
   }
