@@ -134,5 +134,41 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  // 4. GET /api/payments/:id/status - Polling endpoint for transaction status details
+  fastify.get(
+    "/api/payments/:id/status",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const userId = request.user.id;
+
+      try {
+        const res = await query(
+          `SELECT id, status, amount_kes::float AS amount_kes, tokens_spent, initiated_at, completed_at, mpesa_receipt, failure_reason
+           FROM redemption_requests
+           WHERE id = $1 AND user_id = $2`,
+          [id, userId]
+        );
+
+        if (res.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Redemption request not found." }
+          });
+        }
+
+        return {
+          success: true,
+          payment: res.rows[0]
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch payment status." }
+        });
+      }
+    }
+  );
 }
 

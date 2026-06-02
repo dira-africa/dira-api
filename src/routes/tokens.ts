@@ -20,6 +20,7 @@ import { tokenService } from "../services/tokenService";
 import { airtimeService } from "../services/airtimeService";
 import { voucherService } from "../services/voucherService";
 import { diraCircleService } from "../services/diraCircleService";
+import { paymentService } from "../services/paymentService";
 import { env } from "../config/env";
 
 interface RedeemAirtimeRouteBody {
@@ -488,6 +489,120 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve circle status." }
+        });
+      }
+    }
+  );
+
+  // 9. POST /api/tokens/redeem/mpesa - Redeem Climate Tokens for Safaricom Daraja B2C Cashout
+  fastify.post<{ Body: { tokenAmount?: number; token_amount?: number; phoneNumber?: string; phone_number?: string } }>(
+    "/redeem/mpesa",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      if (!env.DARAJA_PRODUCTION_ACTIVE) {
+        return reply.status(503).send({
+          error: {
+            code: "MPESA_NOT_YET_ACTIVE",
+            message: "M-Pesa payouts are coming soon. Use airtime redemption now."
+          }
+        });
+      }
+
+      const userId = request.user.id;
+      const tokenAmount = request.body.tokenAmount ?? request.body.token_amount;
+      const phoneNumber = request.body.phoneNumber ?? request.body.phone_number;
+
+      if (tokenAmount === undefined || !phoneNumber) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "tokenAmount and phoneNumber are required." }
+        });
+      }
+
+      try {
+        const result = await paymentService.initiateMpesaB2C(userId, tokenAmount, phoneNumber);
+        return result;
+      } catch (err: any) {
+        if (err.message === "MPESA_NOT_YET_ACTIVE") {
+          return reply.status(503).send({
+            success: false,
+            error: { code: "MPESA_NOT_YET_ACTIVE", message: "M-Pesa payouts are coming soon. Use airtime redemption now." }
+          });
+        }
+        if (err.message === "BELOW_MINIMUM_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BELOW_MINIMUM_TOKENS", message: "Minimum redemption is 100 Climate Tokens." }
+          });
+        }
+        if (err.message === "INVALID_PHONE_NUMBER") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
+          });
+        }
+        if (err.message === "INSUFFICIENT_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: "Insufficient tokens for redemption." }
+          });
+        }
+        if (err.message === "API_DISBURSEMENT_FAILED") {
+          return reply.status(502).send({
+            success: false,
+            error: { code: "API_DISBURSEMENT_FAILED", message: "M-Pesa B2C Payment request failed." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "An unexpected error occurred." }
+        });
+      }
+    }
+  );
+
+  // 10. GET /api/tokens/redeem/mpesa/status - Retrieve user profile phone & last M-Pesa cashout status
+  fastify.get(
+    "/redeem/mpesa/status",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      try {
+        const userRes = await query(
+          `SELECT pgp_sym_decrypt(phone_number::bytea, $1) AS phone 
+           FROM users WHERE id = $2`,
+          [env.PGCRYPTO_SYMMETRIC_KEY, userId]
+        );
+        const phone = userRes.rows[0]?.phone || "";
+        
+        const requestRes = await query(
+          `SELECT id, status, amount_kes::float AS amount_kes, tokens_spent, initiated_at, completed_at, mpesa_receipt, failure_reason
+           FROM redemption_requests
+           WHERE user_id = $1 AND redemption_type = 'mpesa'
+           ORDER BY initiated_at DESC LIMIT 1`,
+          [userId]
+        );
+
+        const lastRequest = requestRes.rows.length > 0 ? {
+          id: requestRes.rows[0].id,
+          status: requestRes.rows[0].status,
+          amountKes: requestRes.rows[0].amount_kes,
+          tokensSpent: requestRes.rows[0].tokens_spent,
+          initiatedAt: requestRes.rows[0].initiated_at,
+          completedAt: requestRes.rows[0].completed_at,
+          mpesaReceipt: requestRes.rows[0].mpesa_receipt,
+          failureReason: requestRes.rows[0].failure_reason
+        } : null;
+
+        return {
+          success: true,
+          phone,
+          lastRequest
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve status." }
         });
       }
     }
