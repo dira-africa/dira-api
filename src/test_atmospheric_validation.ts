@@ -24,6 +24,12 @@ import databasePlugin from "./plugins/database";
 import authPlugin from "./plugins/auth";
 import jobsPlugin from "./plugins/jobs";
 import { errorHandler } from "./middleware/errorHandler";
+import {
+  photoVerificationWorker,
+  atmosphericVerificationWorker,
+  notificationsWorker,
+  midnightAnchorWorker
+} from "./jobs/workers";
 
 async function runTests() {
   const server = Fastify();
@@ -192,11 +198,25 @@ async function runTests() {
     console.error("Test execution failed:", err.message);
     process.exit(1);
   } finally {
+    // Close the workers first to prevent background jobs from running and causing deadlocks during cleanup
+    try {
+      await photoVerificationWorker.close();
+      await atmosphericVerificationWorker.close();
+      await notificationsWorker.close();
+      await midnightAnchorWorker.close();
+    } catch (workerErr: any) {
+      console.error("Error closing workers during cleanup:", workerErr.message);
+    }
+
     // Cleanup seeded user
-    await pool.query("DELETE FROM token_ledger WHERE user_id = $1", [testAgentId]);
-    await pool.query("DELETE FROM atmospheric_readings WHERE user_id = $1", [testAgentId]);
-    await pool.query("DELETE FROM agent_profiles WHERE user_id = $1", [testAgentId]);
-    await pool.query("DELETE FROM users WHERE id = $1", [testAgentId]);
+    try {
+      await pool.query("DELETE FROM token_ledger WHERE user_id = $1", [testAgentId]);
+      await pool.query("DELETE FROM atmospheric_readings WHERE user_id = $1", [testAgentId]);
+      await pool.query("DELETE FROM agent_profiles WHERE user_id = $1", [testAgentId]);
+      await pool.query("DELETE FROM users WHERE id = $1", [testAgentId]);
+    } catch (dbErr: any) {
+      console.error("Error cleaning up database:", dbErr.message);
+    }
     
     await server.close();
     process.exit(0);
