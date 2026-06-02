@@ -17,6 +17,12 @@
 import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { tokenService } from "../services/tokenService";
+import { airtimeService } from "../services/airtimeService";
+
+interface RedeemAirtimeRouteBody {
+  token_amount: number;
+  phone_number: string;
+}
 
 export default async function tokensRoutes(fastify: FastifyInstance) {
   // 1. GET /api/tokens/balance - Retrieve actual token balance, KES equivalents, and pending tokens
@@ -131,6 +137,121 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         mpesa: rates.mpesa,
         rates
       };
+    }
+  );
+
+  // 4. POST /api/tokens/redeem/airtime - Redeem Climate Tokens for Airtime
+  fastify.post<{ Body: RedeemAirtimeRouteBody }>(
+    "/redeem/airtime",
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: "1 hour",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+        },
+      },
+      attachValidation: true,
+      schema: {
+        body: {
+          type: "object",
+          required: ["token_amount", "phone_number"],
+          properties: {
+            token_amount: { type: "integer", minimum: 20 },
+            phone_number: { 
+              type: "string", 
+              pattern: "^(\\+?254|0)[17][0-9]{8}$" 
+            }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const userId = request.user.id;
+      
+      // Handle schema validation errors and map to specific code/messages
+      if (request.validationError) {
+        const validation = request.validationError.validation;
+        if (validation && validation.length > 0) {
+          const firstErr = validation[0];
+          const path = firstErr.instancePath;
+          const missingProp = firstErr.params?.missingProperty;
+          
+          if (path.includes("token_amount") || missingProp === "token_amount") {
+            return reply.status(400).send({
+              success: false,
+              error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
+            });
+          }
+          if (path.includes("phone_number") || missingProp === "phone_number") {
+            return reply.status(400).send({
+              success: false,
+              error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
+            });
+          }
+        }
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VALIDATION_ERROR", message: request.validationError.message }
+        });
+      }
+
+      const { token_amount, phone_number } = request.body;
+
+      // Duplicate/Fallback manual validation just to be fully secure
+      if (token_amount === undefined || token_amount < 20) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
+        });
+      }
+
+      const phoneRegex = /^(\+?254|0)[17][0-9]{8}$/;
+      if (!phone_number || !phoneRegex.test(phone_number)) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
+        });
+      }
+
+      try {
+        const result = await airtimeService.initiateAirtimeRedemption(
+          userId,
+          token_amount,
+          phone_number
+        );
+        return result;
+      } catch (err: any) {
+        if (err.message === "BELOW_MINIMUM_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
+          });
+        }
+        if (err.message === "INVALID_PHONE_NUMBER") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
+          });
+        }
+        if (err.message === "INSUFFICIENT_TOKENS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: "Insufficient tokens for redemption." }
+          });
+        }
+        if (err.message === "AIRTIME_SEND_FAILED") {
+          return reply.status(502).send({
+            success: false,
+            error: { code: "AIRTIME_SEND_FAILED", message: "Airtime disbursement failed." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "An unexpected error occurred." }
+        });
+      }
     }
   );
 }

@@ -25,6 +25,7 @@
     "@fastify/jwt": "^8.0.1",
     "@fastify/multipart": "^8.3.0",
     "@fastify/rate-limit": "^9.1.0",
+    "africastalking": "^0.7.9",
     "bullmq": "^5.8.2",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.0",
