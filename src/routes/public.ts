@@ -278,7 +278,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   // GET /admin/jobs (root path option)
   fastify.get(
     "/admin/jobs",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
+    { onRequest: [fastify.authenticateAdmin] },
     async (request, reply) => {
       const getQueueStats = async (queue: any, name: string) => {
         const [active, waiting, delayed, completed, failed] = await Promise.all([
@@ -323,6 +323,19 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       };
 
       try {
+        // Log action manually for public router option
+        await query(
+          `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent)
+           VALUES ($1, $2, $3, NULL, $4, $5)`,
+          [
+            request.adminUser!.id,
+            "view_jobs_root",
+            "jobs",
+            request.ip,
+            request.headers["user-agent"] || null
+          ]
+        );
+
         const stats = await Promise.all([
           getQueueStats(photoVerificationQueue, "photo-verification"),
           getQueueStats(atmosphericVerificationQueue, "atmospheric-verification"),

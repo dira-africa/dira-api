@@ -35,12 +35,37 @@ interface CertificateBody {
 }
 
 export default async function adminRoutes(fastify: FastifyInstance) {
-  
+  // 1. Enforce admin auth hook on all routes inside this plugin
+  fastify.addHook("onRequest", fastify.authenticateAdmin);
+
+  // 2. Automate audit logging for successful requests
+  fastify.addHook("onResponse", async (request, reply) => {
+    if (request.adminUser && request.adminAction) {
+      try {
+        await query(
+          `INSERT INTO audit_log (user_id, action, entity_type, entity_id, ip_address, user_agent, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            request.adminUser.id,
+            request.adminAction,
+            request.adminEntityType || "system",
+            request.adminEntityId || null,
+            request.ip,
+            request.headers["user-agent"] || null,
+            request.adminMetadata ? JSON.stringify(request.adminMetadata) : null
+          ]
+        );
+      } catch (err) {
+        request.log.error(err, "Failed to write admin audit log:");
+      }
+    }
+  });
+
   // 1. GET /api/admin/stats - Retrieve dashboard stats
   fastify.get(
     "/stats",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "view_stats";
       try {
         const farmersRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'farmer'");
         const agentsRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent'");
@@ -64,8 +89,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 2. POST /api/admin/midnight/anchor - Trigger catchup anchoring for completed weeks
   fastify.post(
     "/midnight/anchor",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "midnight_anchor";
       try {
         const result = await midnightService.anchorAllCompletedWeeks();
         return result;
@@ -81,8 +106,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 3. POST /api/admin/midnight/certificate - Issue certificate
   fastify.post<{ Body: CertificateBody }>(
     "/midnight/certificate",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "issue_certificate";
       const { countyCode, periodStart, periodEnd, conditionType, confidenceThreshold } = request.body;
 
       if (!countyCode || !periodStart || !periodEnd || !conditionType || confidenceThreshold === undefined) {
@@ -100,6 +125,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           conditionType,
           confidenceThreshold
         );
+
+        if (result.success && result.certId) {
+          // Retrieve UUID of generated certificate
+          const certQuery = await query("SELECT id FROM midnight_certificates WHERE cert_id = $1", [result.certId]);
+          if (certQuery.rows.length > 0) {
+            request.adminEntityId = certQuery.rows[0].id;
+          }
+          request.adminEntityType = "midnight_certificates";
+        }
+
         return result;
       } catch (err: any) {
         return reply.status(500).send({
@@ -113,8 +148,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 4. GET /api/admin/midnight/status - Retrieve Midnight blockchain registry status
   fastify.get(
     "/midnight/status",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "view_midnight_status";
       try {
         const anchorsRes = await query("SELECT * FROM midnight_anchors ORDER BY week_number DESC LIMIT 50");
         const certificatesRes = await query("SELECT * FROM midnight_certificates ORDER BY created_at DESC LIMIT 50");
@@ -136,8 +171,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 5. GET /api/admin/jobs - Retrieve BullMQ jobs statistics and queues details
   fastify.get(
     "/jobs",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "view_jobs";
       const getQueueStats = async (queue: any, name: string) => {
         const [active, waiting, delayed, completed, failed] = await Promise.all([
           queue.getActiveCount(),
@@ -205,8 +240,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 6. POST /api/admin/circle/coordinators - Appoint county coordinator
   fastify.post<{ Body: { agentId?: string; agent_id?: string; countyId?: string; county_id?: string; mpesaNumber?: string; mpesa_number?: string } }>(
     "/circle/coordinators",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "appoint_coordinator";
       const agentId = request.body.agentId ?? request.body.agent_id;
       const countyId = request.body.countyId ?? request.body.county_id;
       const mpesaNumber = request.body.mpesaNumber ?? request.body.mpesa_number;
@@ -237,6 +272,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           [agentId, countyId, mpesaNumber, env.PGCRYPTO_SYMMETRIC_KEY]
         );
 
+        request.adminEntityType = "circle_coordinators";
+        request.adminEntityId = agentId;
+
         return {
           success: true,
           message: `Successfully appointed coordinator for county: ${countyId}`
@@ -253,8 +291,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 7. GET /api/admin/circle/distributions - List pending and completed distributions
   fastify.get(
     "/circle/distributions",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "view_distributions";
       try {
         const res = await query(
           `SELECT d.*, u.full_name AS coordinator_name
@@ -279,8 +317,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // 8. PATCH /api/admin/circle/distributions/:id/confirm - Mark distribution as paid
   fastify.patch<{ Params: { id: string }; Body: { transferReference: string } }>(
     "/circle/distributions/:id/confirm",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["admin"])] },
     async (request, reply) => {
+      request.adminAction = "confirm_distribution";
       const { id } = request.params;
       const { transferReference } = request.body;
 
@@ -293,6 +331,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
       try {
         await diraCircleService.confirmDistribution(id, transferReference);
+
+        request.adminEntityType = "dira_circle_distributions";
+        request.adminEntityId = id;
+
         return {
           success: true,
           message: "Distribution confirmed and paid successfully."
@@ -307,6 +349,78 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to confirm distribution." }
+        });
+      }
+    }
+  );
+
+  // 9. GET /api/admin/users - List recent users
+  fastify.get(
+    "/users",
+    async (request, reply) => {
+      request.adminAction = "view_users";
+      try {
+        const res = await query(
+          "SELECT id, full_name, role, county, is_verified, is_active, created_at FROM users ORDER BY created_at DESC LIMIT 100"
+        );
+        return {
+          success: true,
+          users: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve users." }
+        });
+      }
+    }
+  );
+
+  // 10. GET /api/admin/submissions - List recent crop submissions
+  fastify.get(
+    "/submissions",
+    async (request, reply) => {
+      request.adminAction = "view_submissions";
+      try {
+        const res = await query(
+          `SELECT cs.id, cs.crop_type, cs.verification_status, cs.submitted_at, u.full_name 
+           FROM crop_submissions cs 
+           LEFT JOIN users u ON cs.user_id = u.id 
+           ORDER BY cs.submitted_at DESC LIMIT 100`
+        );
+        return {
+          success: true,
+          submissions: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve submissions." }
+        });
+      }
+    }
+  );
+
+  // 11. GET /api/admin/redemptions - List recent redemptions
+  fastify.get(
+    "/redemptions",
+    async (request, reply) => {
+      request.adminAction = "view_redemptions";
+      try {
+        const res = await query(
+          `SELECT r.id, r.redemption_type, r.amount_kes, r.status, r.initiated_at, u.full_name 
+           FROM redemption_requests r 
+           LEFT JOIN users u ON r.user_id = u.id 
+           ORDER BY r.initiated_at DESC LIMIT 100`
+        );
+        return {
+          success: true,
+          redemptions: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve redemptions." }
         });
       }
     }

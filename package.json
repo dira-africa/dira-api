@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "migrate": "ts-node src/db/migrate.ts",
+    "create-admin": "tsx src/scripts/create-admin.ts",
     "test:midnight": "tsx src/test_midnight_jobs.ts"
   },
   "keywords": [
@@ -26,6 +27,7 @@
     "@fastify/multipart": "^8.3.0",
     "@fastify/rate-limit": "^9.1.0",
     "africastalking": "^0.7.9",
+    "bcryptjs": "^3.0.3",
     "bullmq": "^5.8.2",
     "dotenv": "^16.4.5",
     "fastify": "^4.28.0",
@@ -37,6 +39,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20.14.9",
     "@types/pg": "^8.20.0",
     "@types/qrcode": "^1.5.6",

@@ -4,6 +4,7 @@ import helmet from "@fastify/helmet";
 import jwt from "@fastify/jwt";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
+import fp from "fastify-plugin";
 import fs from "fs";
 import path from "path";
 
@@ -21,6 +22,7 @@ import farmersRoutes from "./routes/farmers";
 import agentsRoutes from "./routes/agents";
 import tokensRoutes from "./routes/tokens";
 import adminRoutes from "./routes/admin";
+import adminAuthRoutes from "./routes/adminAuth";
 import partnerRoutes from "./routes/partner";
 import webhooksRoutes from "./routes/webhooks";
 import cropSubmissionsRoutes from "./routes/cropSubmissions";
@@ -74,6 +76,14 @@ async function main() {
       secret: env.JWT_SECRET,
     });
 
+    // Register separate admin JWT namespace
+    await server.register(fp(async (instance) => {
+      await instance.register(jwt, {
+        secret: process.env.ADMIN_JWT_SECRET || (env.JWT_SECRET + "_admin_hardened"),
+        namespace: "admin",
+      });
+    }));
+
     // 4.5. Register Custom Auth Decorators Plugin
     await server.register(authPlugin);
 
@@ -103,6 +113,7 @@ async function main() {
     await server.register(farmersRoutes, { prefix: "/api/farmers" });
     await server.register(agentsRoutes, { prefix: "/api/agents" });
     await server.register(tokensRoutes, { prefix: "/api/tokens" });
+    await server.register(adminAuthRoutes, { prefix: "/api/admin/auth" });
     await server.register(adminRoutes, { prefix: "/api/admin" });
     await server.register(partnerRoutes, { prefix: "/api/partner" });
     await server.register(webhooksRoutes, { prefix: "/api/webhooks" });
