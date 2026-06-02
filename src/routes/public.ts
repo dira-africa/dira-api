@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
+import { redis } from "../db/redis";
 import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
@@ -8,6 +9,32 @@ import {
 } from "../jobs/queues";
 
 export default async function publicRoutes(fastify: FastifyInstance) {
+  // Caching helper
+  const getCachedOrRun = async (cacheKey: string, expirySeconds: number, runQuery: () => Promise<any>) => {
+    if (redis.status === "ready") {
+      try {
+        const cached = await redis.get(cacheKey);
+        if (cached) {
+          return JSON.parse(cached);
+        }
+      } catch (err) {
+        fastify.log.warn(err, `Redis read failure for key ${cacheKey}`);
+      }
+    }
+
+    const data = await runQuery();
+
+    if (redis.status === "ready") {
+      try {
+        await redis.set(cacheKey, JSON.stringify(data), "EX", expirySeconds);
+      } catch (err) {
+        fastify.log.warn(err, `Redis write failure for key ${cacheKey}`);
+      }
+    }
+
+    return data;
+  };
+
   fastify.get("/health", async (request, reply) => {
     return {
       status: "ok",
@@ -16,52 +43,234 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     };
   });
 
-  fastify.get("/public/coverage-map", async (request, reply) => {
+  fastify.get("/public/stats", async (request, reply) => {
     try {
-      const res = await query(
-        `SELECT 
-           floor(ST_X(location::geometry) / 0.1) * 0.1 AS grid_lon,
-           floor(ST_Y(location::geometry) / 0.1) * 0.1 AS grid_lat,
-           COUNT(*) AS sync_count
-         FROM atmospheric_readings
-         WHERE verified = TRUE AND recorded_at >= CURRENT_DATE - INTERVAL '7 days'
-         GROUP BY grid_lon, grid_lat`
-      );
+      const stats = await getCachedOrRun("dira:public:stats", 60, async () => {
+        const verifiedRes = await query(
+          `SELECT (
+             (SELECT COUNT(*) FROM crop_submissions WHERE verification_status = 'verified') +
+             (SELECT COUNT(*) FROM atmospheric_readings WHERE verified = TRUE)
+           ) AS total_verified`
+        );
+        const activeUsersRes = await query(
+          `SELECT COUNT(DISTINCT user_id) AS active_users FROM (
+             SELECT user_id FROM crop_submissions WHERE submitted_at >= CURRENT_DATE - INTERVAL '7 days'
+             UNION
+             SELECT user_id FROM atmospheric_readings WHERE recorded_at >= CURRENT_DATE - INTERVAL '7 days'
+           ) AS active_users`
+        );
+        const countiesRes = await query(
+          `SELECT COUNT(DISTINCT county) AS counties_covered FROM users WHERE county IS NOT NULL AND county <> ''`
+        );
+        const cropsThisMonthRes = await query(
+          `SELECT COUNT(*) AS crops_this_month FROM crop_submissions WHERE date_trunc('month', submitted_at) = date_trunc('month', CURRENT_DATE)`
+        );
+        const disbursedRes = await query(
+          `SELECT COALESCE(SUM(amount_kes), 0) AS total_disbursed_kes FROM redemption_requests WHERE status = 'completed'`
+        );
 
-      const features = res.rows.map((row: any) => {
-        const gridLon = Number(row.grid_lon);
-        const gridLat = Number(row.grid_lat);
-        const syncCount = Number(row.sync_count);
         return {
-          type: "Feature",
-          geometry: {
-            type: "Polygon",
-            coordinates: [
-              [
-                [gridLon, gridLat],
-                [gridLon + 0.1, gridLat],
-                [gridLon + 0.1, gridLat + 0.1],
-                [gridLon, gridLat + 0.1],
-                [gridLon, gridLat]
-              ]
-            ]
-          },
-          properties: {
-            syncCount,
-            density: syncCount > 10 ? "high" : syncCount > 3 ? "medium" : "low"
-          }
+          totalVerifiedDataPoints: Number(verifiedRes.rows[0]?.total_verified || 0),
+          activeUsers7Days: Number(activeUsersRes.rows[0]?.active_users || 0),
+          countiesCovered: Number(countiesRes.rows[0]?.counties_covered || 0),
+          cropSubmissionsMonth: Number(cropsThisMonthRes.rows[0]?.crops_this_month || 0),
+          tokensDisbursedKes: Number(disbursedRes.rows[0]?.total_disbursed_kes || 0)
         };
       });
 
-      return {
-        type: "FeatureCollection",
-        features
-      };
+      return { success: true, stats };
     } catch (err: any) {
-      fastify.log.error("Failed to generate public coverage map GeoJSON:", err);
+      fastify.log.error("Failed to fetch public stats:", err);
       return reply.status(500).send({
         success: false,
-        error: { code: "SERVER_ERROR", message: "Failed to generate coverage map." }
+        error: { code: "SERVER_ERROR", message: "Failed to fetch network statistics." }
+      });
+    }
+  });
+
+  fastify.get("/public/coverage-map", async (request, reply) => {
+    try {
+      const mapData = await getCachedOrRun("dira:public:coverage-map", 300, async () => {
+        const gridsRes = await query(
+          `SELECT 
+             floor(ST_X(location::geometry) / 0.05) * 0.05 AS grid_lon,
+             floor(ST_Y(location::geometry) / 0.05) * 0.05 AS grid_lat,
+             COUNT(*) AS density_count
+           FROM (
+             SELECT location FROM atmospheric_readings WHERE verified = TRUE AND recorded_at >= CURRENT_DATE - INTERVAL '30 days'
+             UNION ALL
+             SELECT location FROM crop_submissions WHERE verification_status = 'verified' AND submitted_at >= CURRENT_DATE - INTERVAL '30 days'
+           ) AS combined_data
+           GROUP BY grid_lon, grid_lat`
+         );
+
+         const activeCountiesRes = await query(
+           `SELECT DISTINCT county FROM (
+             SELECT DISTINCT county FROM farms f
+             JOIN crop_submissions cs ON f.id = cs.farm_id
+             WHERE cs.verification_status = 'verified' AND cs.submitted_at >= CURRENT_DATE - INTERVAL '30 days'
+             UNION
+             SELECT DISTINCT u.county FROM users u
+             JOIN atmospheric_readings ar ON u.id = ar.user_id
+             WHERE ar.verified = TRUE AND ar.recorded_at >= CURRENT_DATE - INTERVAL '30 days'
+           ) AS active_counties WHERE county IS NOT NULL AND county <> ''`
+         );
+
+         const activeCounties = activeCountiesRes.rows.map((row: any) => row.county);
+         const grids = gridsRes.rows.map((row: any) => ({
+           lon: Number(row.grid_lon),
+           lat: Number(row.grid_lat),
+           density: Number(row.density_count)
+         }));
+
+         return { activeCounties, grids };
+       });
+
+       return { success: true, activeCounties: mapData.activeCounties, grids: mapData.grids };
+     } catch (err: any) {
+       fastify.log.error("Failed to generate coverage map:", err);
+       return reply.status(500).send({
+         success: false,
+         error: { code: "SERVER_ERROR", message: "Failed to generate coverage map." }
+       });
+     }
+   });
+
+  fastify.get("/public/circular-economy-summary", async (request, reply) => {
+    try {
+      const summary = await getCachedOrRun("dira:public:circular-economy-summary", 300, async () => {
+        const airtimeRes = await query(
+          `SELECT COALESCE(SUM(amount_kes), 0) AS total FROM redemption_requests WHERE redemption_type = 'airtime' AND status = 'completed' AND initiated_at >= CURRENT_DATE - INTERVAL '30 days'`
+        );
+        const vouchersRes = await query(
+          `SELECT COALESCE(SUM(amount_kes), 0) AS total FROM redemption_requests WHERE redemption_type = 'voucher' AND status = 'completed'`
+        );
+        const circleRes = await query(
+          `SELECT COALESCE(SUM(amount_kes), 0) AS total FROM redemption_requests WHERE redemption_type = 'circle' AND status = 'completed'`
+        );
+        const mpesaRes = await query(
+          `SELECT COALESCE(SUM(amount_kes), 0) AS total FROM redemption_requests WHERE redemption_type = 'mpesa' AND status = 'completed'`
+        );
+
+        return {
+          airtime30Days: Number(airtimeRes.rows[0]?.total || 0),
+          vouchersAllTime: Number(vouchersRes.rows[0]?.total || 0),
+          circleAllTime: Number(circleRes.rows[0]?.total || 0),
+          mpesaAllTime: Number(mpesaRes.rows[0]?.total || 0)
+        };
+      });
+
+      return { success: true, summary };
+    } catch (err: any) {
+      fastify.log.error("Failed to fetch circular economy summary:", err);
+      return reply.status(500).send({
+        success: false,
+        error: { code: "SERVER_ERROR", message: "Failed to fetch circular economy statistics." }
+      });
+    }
+  });
+
+  fastify.get("/public/activity-feed", async (request, reply) => {
+    try {
+      const activities = await getCachedOrRun("dira:public:activity-feed", 30, async () => {
+        const res = await query(
+          `SELECT timestamp, role, county, crop_type FROM (
+             (
+               SELECT cs.submitted_at AS timestamp, 'farmer' AS role, f.county, cs.crop_type 
+               FROM crop_submissions cs 
+               JOIN farms f ON cs.farm_id = f.id 
+               WHERE cs.verification_status = 'verified'
+               ORDER BY cs.submitted_at DESC LIMIT 10
+             )
+             UNION ALL
+             (
+               SELECT ar.recorded_at AS timestamp, 'agent' AS role, u.county, NULL::VARCHAR AS crop_type 
+               FROM atmospheric_readings ar 
+               JOIN users u ON ar.user_id = u.id 
+               WHERE ar.verified = TRUE 
+               ORDER BY ar.recorded_at DESC LIMIT 10
+             )
+           ) AS combined_activity
+           ORDER BY timestamp DESC
+           LIMIT 10`
+        );
+
+        return res.rows.map((row: any) => ({
+          role: row.role,
+          county: row.county,
+          cropType: row.crop_type,
+          timestamp: row.timestamp
+        }));
+      });
+
+      return { success: true, activities };
+    } catch (err: any) {
+      fastify.log.error("Failed to fetch activity feed:", err);
+      return reply.status(500).send({
+        success: false,
+        error: { code: "SERVER_ERROR", message: "Failed to fetch activity feed." }
+      });
+    }
+  });
+
+  fastify.get("/public/quality-metrics", async (request, reply) => {
+    try {
+      const metrics = await getCachedOrRun("dira:public:quality-metrics", 3600, async () => {
+        const res = await query(
+          `SELECT 
+             recorded_at::DATE AS day,
+             COALESCE(COUNT(CASE WHEN verified = TRUE AND anomaly_score < 0.02 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS pct_high,
+             COALESCE(COUNT(CASE WHEN verified = TRUE AND anomaly_score >= 0.02 AND anomaly_score <= 0.05 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS pct_medium,
+             COALESCE(COUNT(CASE WHEN verified = FALSE OR anomaly_score > 0.05 THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS pct_low,
+             COALESCE(COUNT(CASE WHEN network_consensus = TRUE THEN 1 END) * 100.0 / NULLIF(COUNT(*), 0), 0) AS network_consensus_rate
+           FROM atmospheric_readings
+           WHERE recorded_at >= CURRENT_DATE - INTERVAL '30 days'
+           GROUP BY day
+           ORDER BY day ASC`
+        );
+
+        return res.rows.map((row: any) => ({
+          day: new Date(row.day).toISOString().split("T")[0],
+          pctHigh: Number(row.pct_high),
+          pctMedium: Number(row.pct_medium),
+          pctLow: Number(row.pct_low),
+          networkConsensusRate: Number(row.network_consensus_rate)
+        }));
+      });
+
+      return { success: true, metrics };
+    } catch (err: any) {
+      fastify.log.error("Failed to fetch quality metrics:", err);
+      return reply.status(500).send({
+        success: false,
+        error: { code: "SERVER_ERROR", message: "Failed to fetch quality metrics." }
+      });
+    }
+  });
+
+  fastify.get("/public/midnight-anchors", async (request, reply) => {
+    try {
+      const anchors = await getCachedOrRun("dira:public:midnight-anchors", 300, async () => {
+        const res = await query(
+          `SELECT week_number, batch_hash, midnight_tx_hash, anchored_at 
+           FROM midnight_anchors 
+           ORDER BY week_number DESC LIMIT 5`
+        );
+
+        return res.rows.map((row: any) => ({
+          weekNumber: row.week_number,
+          batchHash: row.batch_hash.trim(),
+          midnightTxHash: row.midnight_tx_hash,
+          anchoredAt: row.anchored_at
+        }));
+      });
+
+      return { success: true, anchors };
+    } catch (err: any) {
+      fastify.log.error("Failed to fetch midnight anchors:", err);
+      return reply.status(500).send({
+        success: false,
+        error: { code: "SERVER_ERROR", message: "Failed to fetch Midnight blockchain anchor updates." }
       });
     }
   });
