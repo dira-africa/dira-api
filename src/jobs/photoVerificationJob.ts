@@ -18,60 +18,56 @@ import { Job } from "bullmq";
 import { query } from "../db/query";
 import { aiService } from "../services/aiService";
 import { tokenService } from "../services/tokenService";
+import { notificationsQueue } from "./queues";
 import path from "path";
+import fs from "fs";
 
 export async function processPhotoVerification(job: Job) {
   const { submissionId, userId, farmId, photoUrl, cropType, growthStage, latitude, longitude } = job.data;
 
-  // 1. Proximity check (must be within 500 meters of the farm)
-  const distanceRes = await query(
-    `SELECT ST_Distance(
-      farm_location::geography, 
-      ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
-    ) AS distance_meters FROM farms WHERE id = $3`,
-    [longitude, latitude, farmId]
-  );
-
-  const distanceMeters = Number(distanceRes.rows[0].distance_meters);
-
-  if (distanceMeters > 500) {
-    const rejectionMsg = `Crop photo location (${distanceMeters.toFixed(1)}m) is too far from the registered farm location (max 500m limit).`;
-    
-    await query(
-      `UPDATE crop_submissions 
-       SET verification_status = 'rejected', 
-           rejection_reason = $1,
-           ai_report_en = $1,
-           ai_report_sw = $2
-       WHERE id = $3`,
-      [
-        rejectionMsg, 
-        `Eneo la picha ya zao (${distanceMeters.toFixed(1)}m) lipo mbali sana na eneo la shamba lako lililosajiliwa (kiwango cha juu ni mita 500).`,
-        submissionId
-      ]
-    );
-    return { verified: false, reason: "SPOOF_LOCATION_REJECTED" };
-  }
-
-  // 2. Run AI photo analysis (greenness and plant species match)
   const filename = photoUrl.substring(photoUrl.lastIndexOf("/") + 1);
   const filePath = path.join(__dirname, "../../public/uploads", filename);
 
-  const aiResult = await aiService.verifyCropPhoto(filePath, cropType);
+  try {
+    // Call AI photo verification service, passing farmId and GPS coordinates
+    const aiResult = await aiService.verifyCropPhoto(filePath, cropType, farmId, latitude, longitude);
 
-  if (!aiResult.isVerified) {
+    if (!aiResult.isVerified) {
+      await query(
+        `UPDATE crop_submissions
+         SET verification_status = 'rejected',
+             rejection_reason = $1,
+             ai_health_score = $2,
+             ai_confidence = $3,
+             ai_detected_issues = $4,
+             ai_report_en = $5,
+             ai_report_sw = $6
+         WHERE id = $7`,
+        [
+          aiResult.reason || aiResult.reportEn,
+          aiResult.healthScore,
+          aiResult.confidence,
+          JSON.stringify(aiResult.detectedIssues),
+          aiResult.reportEn,
+          aiResult.reportSw,
+          submissionId
+        ]
+      );
+      return { verified: false, reason: aiResult.reason || "AI_VERIFICATION_FAILED" };
+    }
+
+    // Update submission record to verified
     await query(
       `UPDATE crop_submissions
-       SET verification_status = 'rejected',
-           rejection_reason = $1,
-           ai_health_score = $2,
-           ai_confidence = $3,
-           ai_detected_issues = $4,
-           ai_report_en = $5,
-           ai_report_sw = $6
-       WHERE id = $7`,
+       SET verification_status = 'verified',
+           ai_health_score = $1,
+           ai_confidence = $2,
+           ai_detected_issues = $3,
+           ai_report_en = $4,
+           ai_report_sw = $5,
+           verified_at = CURRENT_TIMESTAMP
+       WHERE id = $6`,
       [
-        aiResult.reportEn,
         aiResult.healthScore,
         aiResult.confidence,
         JSON.stringify(aiResult.detectedIssues),
@@ -80,39 +76,50 @@ export async function processPhotoVerification(job: Job) {
         submissionId
       ]
     );
-    return { verified: false, reason: "AI_VERIFICATION_FAILED" };
-  }
 
-  // 3. Update to verified
-  await query(
-    `UPDATE crop_submissions
-     SET verification_status = 'verified',
-         ai_health_score = $1,
-         ai_confidence = $2,
-         ai_detected_issues = $3,
-         ai_report_en = $4,
-         ai_report_sw = $5,
-         verified_at = CURRENT_TIMESTAMP
-     WHERE id = $6`,
-    [
-      aiResult.healthScore,
-      aiResult.confidence,
-      JSON.stringify(aiResult.detectedIssues),
-      aiResult.reportEn,
-      aiResult.reportSw,
+    // Calculate token awards: 5 standard, 1 bonus if all checks pass and confidence > 0.85
+    const hasGeoAnomaly = aiResult.detectedIssues?.geo_anomaly === true;
+    const hasSpeciesMismatch = aiResult.detectedIssues?.species_mismatch === true;
+    const isBonus = aiResult.confidence > 0.85 && !hasGeoAnomaly && !hasSpeciesMismatch;
+    const tokensToAward = isBonus ? 6 : 5;
+
+    await tokenService.awardTokens(
+      userId,
+      tokensToAward,
+      `Reward for verified crop photo submission of ${cropType} (${growthStage})${isBonus ? " - High Confidence Bonus" : ""}`,
+      "crop_photo",
       submissionId
-    ]
-  );
+    );
 
-  // 4. Award Climate Tokens (15 DIRA)
-  const tokensToAward = 15;
-  await tokenService.awardTokens(
-    userId,
-    tokensToAward,
-    `Reward for verified crop photo submission of ${cropType} (${growthStage})`,
-    "crop_photo",
-    submissionId
-  );
+    // Fetch user details for Telegram notification
+    const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);
+    const farmerTelegramId = userRes.rows[0]?.telegram_id;
+    const farmerLang = userRes.rows[0]?.language || "en";
 
-  return { verified: true, tokensAwarded: tokensToAward };
+    if (farmerTelegramId) {
+      const isSw = farmerLang === "sw";
+      const header = isSw 
+        ? `Habari! Afya ya zao lako imehakikiwa. Umepokea tokeni ${tokensToAward}!` 
+        : `Hello! Your crop health has been verified. You earned ${tokensToAward} tokens!`;
+      
+      const reportMsg = isSw ? aiResult.reportSw : aiResult.reportEn;
+
+      await notificationsQueue.add("send-telegram", {
+        telegramId: String(farmerTelegramId),
+        message: `${header}\n\n${reportMsg}`
+      });
+    }
+
+    return { verified: true, tokensAwarded: tokensToAward };
+  } finally {
+    // Clean up: delete original photo file from server to prevent disk bloat
+    if (fs.existsSync(filePath)) {
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`Successfully deleted processed photo file: ${filePath}`);
+      } catch (err: any) {
+        console.error(`Failed to delete processed photo file ${filePath}:`, err.message);
+      }
+    }
+  }
 }
