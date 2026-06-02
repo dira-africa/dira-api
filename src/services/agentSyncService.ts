@@ -43,6 +43,7 @@ export class AgentSyncService {
     }
 
     let verifiedCount = 0;
+    let tokensAwarded = 0;
 
     for (const reading of readings) {
       const { pressureHpa, altitudeM, temperatureC, humidityPct, latitude, longitude, recordedAt } = reading;
@@ -60,74 +61,43 @@ export class AgentSyncService {
       }
 
       const recordedAtDate = new Date(recordedAt);
-      const dateStr = recordedAtDate.toISOString().split("T")[0];
-      const hour = recordedAtDate.getUTCHours();
+      const tempVal = temperatureC !== undefined ? temperatureC : 20.0;
+      const humVal = humidityPct !== undefined ? humidityPct : 60.0;
 
-      // A. Fetch OpenMeteo hourly reference for Sea Level Pressure comparison
-      const openMeteoPressures = await triangulationService.fetchOpenMeteoReference(latitude, longitude, dateStr);
-      const openMeteoRef = openMeteoPressures[hour] || 1013.25;
-
-      // B. Calibrate station pressure reading to sea level based on altitude and temperature
-      const calibratedSlp = triangulationService.calibrateToSeaLevel(pressureHpa, altitudeM, temperatureC);
-
-      // C. Perform spatial triangulation consensus check against neighboring agents
-      const triResult = await triangulationService.triangulateReading(
-        userId,
-        latitude,
-        longitude,
-        calibratedSlp,
-        recordedAtDate,
-        openMeteoRef
-      );
-
-      if (triResult.verified) {
-        verifiedCount++;
-      }
-
-      // D. Save record to atmospheric_readings
-      await query(
+      // 1. Insert reading initially unverified
+      const insertRes = await query(
         `INSERT INTO atmospheric_readings (
           user_id, location, pressure_hpa, altitude_m, temperature_c, humidity_pct,
           recorded_at, verified, anomaly_score, openmeteo_reference_hpa, network_consensus
-        ) VALUES ($1, ST_SetSRID(ST_MakePoint($2, $3), 4326), $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-        [
-          userId,
-          longitude,
-          latitude,
-          pressureHpa,
-          altitudeM,
-          temperatureC,
-          humidityPct,
-          recordedAtDate,
-          triResult.verified,
-          triResult.anomalyScore,
-          triResult.openmeteoReferenceHpa,
-          triResult.networkConsensus
-        ]
+        ) VALUES ($1, ST_SetSRID(ST_MakePoint($2, $3), 4326), $4, $5, $6, $7, $8, FALSE, 0.000, NULL, FALSE)
+        RETURNING id`,
+        [userId, longitude, latitude, pressureHpa, altitudeM, tempVal, humVal, recordedAtDate]
       );
-    }
+      const readingId = insertRes.rows[0].id;
 
-    // E. Award tokens if at least one reading is successfully verified and within daily limit
-    let tokensAwarded = 0;
-    if (verifiedCount > 0) {
-      const limitRes = await query(
-        `SELECT COUNT(*) AS sync_count 
-         FROM token_ledger 
-         WHERE user_id = $1 
-           AND transaction_type = 'atmospheric_sync' 
-           AND created_at >= CURRENT_DATE`,
-        [userId]
+      // 2. Insert pending 1 token
+      await tokenService.awardTokens(
+        userId,
+        1,
+        "pending",
+        "atmospheric_sync",
+        readingId
       );
 
-      const syncCount = Number(limitRes.rows[0].sync_count);
-      if (syncCount < 4) {
-        tokensAwarded = 3;
-        await tokenService.awardTokens(
-          userId,
-          tokensAwarded,
-          `Reward for verified atmospheric pressure synchronization (${verifiedCount} verified)`,
-          "atmospheric_sync"
+      // 3. Call verifyAtmosphericReading
+      const verifyResult = await triangulationService.verifyAtmosphericReading(readingId);
+
+      if (verifyResult.verified) {
+        verifiedCount++;
+        // Check if token was confirmed (not reversed due to limit)
+        const checkLedger = await query(
+          `SELECT id FROM token_ledger
+           WHERE reference_id = $1 AND transaction_type = 'atmospheric_sync' AND notes = 'confirmed'`,
+          [readingId]
         );
+        if (checkLedger.rows.length > 0) {
+          tokensAwarded += 1;
+        }
       }
     }
 

@@ -68,80 +68,10 @@ export async function processAtmosphericVerification(job: Job) {
     return { success: true };
   }
 
-  const { readingId, userId, pressureHpa, altitudeM, temperatureC, humidityPct, latitude, longitude, recordedAt } = job.data;
+  const { readingId } = job.data;
 
-  const recordedAtDate = new Date(recordedAt);
-  const dateStr = recordedAtDate.toISOString().split("T")[0];
-  const hour = recordedAtDate.getUTCHours();
-
-  // A. Fetch OpenMeteo hourly reference
-  const openMeteoPressures = await triangulationService.fetchOpenMeteoReference(latitude, longitude, dateStr);
-  const openMeteoRef = openMeteoPressures[hour] || 1013.25;
-
-  // B. Calibrate station pressure reading
-  const calibratedSlp = triangulationService.calibrateToSeaLevel(pressureHpa, altitudeM, temperatureC);
-
-  // C. Perform peer triangulation
-  const triResult = await triangulationService.triangulateReading(
-    userId,
-    latitude,
-    longitude,
-    calibratedSlp,
-    recordedAtDate,
-    openMeteoRef
-  );
-
-  // D. Update atmospheric_readings record
-  await query(
-    `UPDATE atmospheric_readings
-     SET verified = $1,
-         anomaly_score = $2,
-         openmeteo_reference_hpa = $3,
-         network_consensus = $4
-     WHERE id = $5`,
-    [
-      triResult.verified,
-      triResult.anomalyScore,
-      triResult.openmeteoReferenceHpa,
-      triResult.networkConsensus,
-      readingId
-    ]
-  );
-
-  // E. Adjust token status
-  if (triResult.verified) {
-    // Confirm the pending token
-    await query(
-      `UPDATE token_ledger
-       SET notes = 'confirmed'
-       WHERE reference_id = $1 AND transaction_type = 'atmospheric_sync'`,
-      [readingId]
-    );
-  } else {
-    // Reverse the pending token: insert a debit of -1 token
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      const balanceRes = await client.query(
-        "SELECT balance_after FROM token_ledger WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1 FOR UPDATE",
-        [userId]
-      );
-      const currentBalance = balanceRes.rows.length > 0 ? Number(balanceRes.rows[0].balance_after) : 0;
-      const newBalance = Math.max(0, currentBalance - 1);
-      
-      await client.query(
-        `INSERT INTO token_ledger (user_id, amount, balance_after, transaction_type, reference_id, notes)
-         VALUES ($1, -1, $2, 'adjustment', $3, 'Failed triangulation consensus - reversed')`,
-         [userId, newBalance, readingId]
-      );
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
+  // Delegate verification to triangulationService
+  const triResult = await triangulationService.verifyAtmosphericReading(readingId);
 
   return { success: true, verified: triResult.verified };
 }
