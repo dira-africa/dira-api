@@ -20,7 +20,7 @@ import { query } from "../db/query";
 import { processPhotoVerification } from "./photoVerificationJob";
 import { processAtmosphericVerification } from "./atmosphericVerificationJob";
 import { processNotification } from "./notificationJob";
-import { processMidnightAnchor } from "./midnightAnchorJob";
+import { processXionAnchor } from "./xionAnchorJob";
 
 // Helper: Handle job attempt failure (transient error)
 async function handleJobAttemptFailed(job: Job, err: Error) {
@@ -137,9 +137,9 @@ export const notificationsWorker = new Worker(
   { connection, concurrency: 1 }
 );
 
-export const midnightAnchorWorker = new Worker(
-  "midnight-anchor",
-  createWorkerProcessor(processMidnightAnchor),
+export const xionAnchorWorker = new Worker(
+  "xion-anchor",
+  createWorkerProcessor(processXionAnchor),
   { connection, concurrency: 1 }
 );
 
@@ -148,7 +148,7 @@ const workers = [
   photoVerificationWorker,
   atmosphericVerificationWorker,
   notificationsWorker,
-  midnightAnchorWorker
+  xionAnchorWorker
 ];
 
 workers.forEach(w => {

@@ -25,6 +25,10 @@ const envSchema = z.object({
     .string()
     .default("true")
     .transform((val) => val === "true" || val === "1"),
+  VOUCHERS_ACTIVE: z
+    .string()
+    .default("false")
+    .transform((val) => val === "true" || val === "1"),
   TELEGRAM_BOT_TOKEN: z
     .string()
     .default("123456789:placeholder_bot_token"),
@@ -40,12 +44,13 @@ const envSchema = z.object({
   DARAJA_SHORTCODE: z.string().optional(),
   VOUCHER_SIGNING_SECRET: z
     .string()
+    .min(32, "VOUCHER_SIGNING_SECRET must be at least 32 characters long")
     .default("SuperSecureVoucherSigningSecretPassphraseLength32"),
-  MIDNIGHT_PROOF_SERVER_URL: z.string().optional(),
-  MIDNIGHT_INDEXER_URL: z.string().optional(),
-  MIDNIGHT_WALLET_SEED: z.string().optional(),
-  MIDNIGHT_ANCHOR_CONTRACT_ADDRESS: z.string().optional(),
-  MIDNIGHT_CERTIFICATE_CONTRACT_ADDRESS: z.string().optional(),
+  XION_RPC_URL: z.string().optional(),
+  XION_MNEMONIC: z.string().optional(),
+  XION_CONTRACT_ADDRESS: z.string().optional(),
+  ZKVERIFY_API_URL: z.string().optional(),
+  ZKVERIFY_VK_ID: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

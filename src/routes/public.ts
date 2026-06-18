@@ -5,7 +5,7 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  midnightAnchorQueue
+  xionAnchorQueue
 } from "../jobs/queues";
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -43,7 +43,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     };
   });
 
-  fastify.get("/public/stats", async (request, reply) => {
+  fastify.get(
+    "/public/stats",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
       const stats = await getCachedOrRun("dira:public:stats", 60, async () => {
         const verifiedRes = await query(
@@ -88,7 +99,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/public/coverage-map", async (request, reply) => {
+  fastify.get(
+    "/public/coverage-map",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
       const mapData = await getCachedOrRun("dira:public:coverage-map", 300, async () => {
         const gridsRes = await query(
@@ -136,7 +158,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
      }
    });
 
-  fastify.get("/public/circular-economy-summary", async (request, reply) => {
+  fastify.get(
+    "/public/circular-economy-summary",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
       const summary = await getCachedOrRun("dira:public:circular-economy-summary", 300, async () => {
         const airtimeRes = await query(
@@ -170,7 +203,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/public/activity-feed", async (request, reply) => {
+  fastify.get(
+    "/public/activity-feed",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
       const activities = await getCachedOrRun("dira:public:activity-feed", 30, async () => {
         const res = await query(
@@ -213,7 +257,18 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/public/quality-metrics", async (request, reply) => {
+  fastify.get(
+    "/public/quality-metrics",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
       const metrics = await getCachedOrRun("dira:public:quality-metrics", 3600, async () => {
         const res = await query(
@@ -248,29 +303,42 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get("/public/midnight-anchors", async (request, reply) => {
+  fastify.get(
+    "/public/xion-anchors",
+    {
+      config: {
+        rateLimit: {
+          max: 50,
+          timeWindow: "1 minute",
+          groupId: "public-group",
+        } as any,
+      },
+    },
+    async (request, reply) => {
     try {
-      const anchors = await getCachedOrRun("dira:public:midnight-anchors", 300, async () => {
+      const anchors = await getCachedOrRun("dira:public:xion-anchors", 300, async () => {
         const res = await query(
-          `SELECT week_number, batch_hash, midnight_tx_hash, anchored_at 
-           FROM midnight_anchors 
+          `SELECT week_number, batch_hash, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at 
+           FROM xion_anchors 
            ORDER BY week_number DESC LIMIT 5`
         );
 
         return res.rows.map((row: any) => ({
           weekNumber: row.week_number,
           batchHash: row.batch_hash.trim(),
-          midnightTxHash: row.midnight_tx_hash,
+          xionTxHash: row.xion_tx_hash,
+          zkverifyProofId: row.zkverify_proof_id,
+          zkverifyTxHash: row.zkverify_tx_hash,
           anchoredAt: row.anchored_at
         }));
       });
 
       return { success: true, anchors };
     } catch (err: any) {
-      fastify.log.error("Failed to fetch midnight anchors:", err);
+      fastify.log.error("Failed to fetch XION anchors:", err);
       return reply.status(500).send({
         success: false,
-        error: { code: "SERVER_ERROR", message: "Failed to fetch Midnight blockchain anchor updates." }
+        error: { code: "SERVER_ERROR", message: "Failed to fetch XION blockchain anchor updates." }
       });
     }
   });
@@ -340,7 +408,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           getQueueStats(photoVerificationQueue, "photo-verification"),
           getQueueStats(atmosphericVerificationQueue, "atmospheric-verification"),
           getQueueStats(notificationsQueue, "notifications"),
-          getQueueStats(midnightAnchorQueue, "midnight-anchor")
+          getQueueStats(xionAnchorQueue, "xion-anchor")
         ]);
 
         return {

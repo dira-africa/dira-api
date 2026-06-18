@@ -15,16 +15,20 @@
  */
 
 import { FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
+import "../plugins/jobs";
 import { query } from "../db/query";
-import { midnightService } from "../services/midnightService";
+import { pool } from "../db/pool";
+import { xionService } from "../services/xionService";
 import { diraCircleService } from "../services/diraCircleService";
+import { paymentService } from "../services/paymentService";
 import { env } from "../config/env";
 import { tokenService } from "../services/tokenService";
 import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  midnightAnchorQueue
+  xionAnchorQueue
 } from "../jobs/queues";
 
 interface CertificateBody {
@@ -36,6 +40,13 @@ interface CertificateBody {
 }
 
 export default async function adminRoutes(fastify: FastifyInstance) {
+  await fastify.register(rateLimit, {
+    max: 30,
+    timeWindow: "1 minute",
+    groupId: "admin-group",
+    keyGenerator: (request: any) => request.ip,
+  } as any);
+
   // 1. Enforce admin auth hook on all routes inside this plugin
   fastify.addHook("onRequest", fastify.authenticateAdmin);
 
@@ -70,7 +81,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       try {
         const farmersRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'farmer'");
         const agentsRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent'");
-        const anchorsRes = await query("SELECT COUNT(*) AS count FROM midnight_anchors");
+        const anchorsRes = await query("SELECT COUNT(*) AS count FROM xion_anchors");
         
         return {
           success: true,
@@ -87,13 +98,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 2. POST /api/admin/midnight/anchor - Trigger catchup anchoring for completed weeks
+  // 2. POST /api/admin/xion-zkverify/anchor - Trigger catchup anchoring for completed weeks
   fastify.post(
-    "/midnight/anchor",
+    "/xion-zkverify/anchor",
     async (request, reply) => {
-      request.adminAction = "midnight_anchor";
+      request.adminAction = "xion_anchor";
       try {
-        const result = await midnightService.anchorAllCompletedWeeks();
+        const result = await xionService.anchorAllCompletedWeeks();
         return result;
       } catch (err: any) {
         return reply.status(500).send({
@@ -104,9 +115,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 3. POST /api/admin/midnight/certificate - Issue certificate
+  // 3. POST /api/admin/xion-zkverify/certificate - Issue certificate
   fastify.post<{ Body: CertificateBody }>(
-    "/midnight/certificate",
+    "/xion-zkverify/certificate",
     async (request, reply) => {
       request.adminAction = "issue_certificate";
       const { countyCode, periodStart, periodEnd, conditionType, confidenceThreshold } = request.body;
@@ -119,7 +130,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        const result = await midnightService.issueCertificate(
+        const result = await xionService.issueCertificate(
           countyCode,
           new Date(periodStart),
           new Date(periodEnd),
@@ -129,11 +140,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
         if (result.success && result.certId) {
           // Retrieve UUID of generated certificate
-          const certQuery = await query("SELECT id FROM midnight_certificates WHERE cert_id = $1", [result.certId]);
+          const certQuery = await query("SELECT id FROM xion_certificates WHERE cert_id = $1", [result.certId]);
           if (certQuery.rows.length > 0) {
             request.adminEntityId = certQuery.rows[0].id;
           }
-          request.adminEntityType = "midnight_certificates";
+          request.adminEntityType = "xion_certificates";
         }
 
         return result;
@@ -146,14 +157,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 4. GET /api/admin/midnight/status - Retrieve Midnight blockchain registry status
+  // 4. GET /api/admin/xion-zkverify/status - Retrieve XION blockchain registry status
   fastify.get(
-    "/midnight/status",
+    "/xion-zkverify/status",
     async (request, reply) => {
-      request.adminAction = "view_midnight_status";
+      request.adminAction = "view_xion_status";
       try {
-        const anchorsRes = await query("SELECT * FROM midnight_anchors ORDER BY week_number DESC LIMIT 50");
-        const certificatesRes = await query("SELECT * FROM midnight_certificates ORDER BY created_at DESC LIMIT 50");
+        const anchorsRes = await query("SELECT * FROM xion_anchors ORDER BY week_number DESC LIMIT 50");
+        const certificatesRes = await query("SELECT * FROM xion_certificates ORDER BY created_at DESC LIMIT 50");
 
         return {
           success: true,
@@ -163,7 +174,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       } catch (err: any) {
         return reply.status(500).send({
           success: false,
-          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve Midnight registry status." }
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve XION registry status." }
         });
       }
     }
@@ -221,7 +232,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           getQueueStats(photoVerificationQueue, "photo-verification"),
           getQueueStats(atmosphericVerificationQueue, "atmospheric-verification"),
           getQueueStats(notificationsQueue, "notifications"),
-          getQueueStats(midnightAnchorQueue, "midnight-anchor")
+          getQueueStats(xionAnchorQueue, "xion-anchor")
         ]);
 
         return {
@@ -1192,6 +1203,892 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           return {
             success: true,
             report: reportData
+          };
+        }
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to generate report." }
+        });
+      }
+    }
+  );
+
+  // === MODULE 5: CIRCULAR ECONOMY ROUTES ===
+
+  // 18. GET /api/admin/agro-dealers - List all agro-dealers
+  fastify.get(
+    "/agro-dealers",
+    async (request, reply) => {
+      request.adminAction = "view_agro_dealers";
+      try {
+        const res = await query(
+          `SELECT 
+             ad.*,
+             COALESCE(
+               (SELECT json_agg(category_name) 
+                FROM dealer_product_categories 
+                WHERE dealer_id = ad.id AND is_active = TRUE), 
+               '[]'::json
+             ) AS categories
+           FROM agro_dealers ad
+           ORDER BY ad.created_at DESC`
+        );
+        return {
+          success: true,
+          agroDealers: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve agro-dealers." }
+        });
+      }
+    }
+  );
+
+  // 19. POST /api/admin/agro-dealers - Add a new agro-dealer
+  fastify.post<{
+    Body: {
+      dealerName: string;
+      dealerPhone: string;
+      countyId: string;
+      bankAccount: string;
+      mouSignedAt?: string;
+      transactionFeePct?: number;
+      categories?: string[];
+      dealerLogoUrl?: string;
+    };
+  }>(
+    "/agro-dealers",
+    async (request, reply) => {
+      request.adminAction = "create_agro_dealer";
+      const {
+        dealerName,
+        dealerPhone,
+        countyId,
+        bankAccount,
+        mouSignedAt,
+        transactionFeePct = 3.50,
+        categories = [],
+        dealerLogoUrl
+      } = request.body;
+
+      if (!dealerName || !dealerPhone || !countyId || !bankAccount) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "dealerName, dealerPhone, countyId, and bankAccount are required." }
+        });
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        const dealerInsert = await client.query(
+          `INSERT INTO agro_dealers (dealer_name, dealer_phone, county_id, mou_signed_at, bank_account, transaction_fee_pct, active, dealer_logo_url)
+           VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7)
+           RETURNING id`,
+          [
+            dealerName,
+            dealerPhone,
+            countyId,
+            mouSignedAt ? new Date(mouSignedAt) : null,
+            bankAccount,
+            transactionFeePct,
+            dealerLogoUrl || null
+          ]
+        );
+        const dealerId = dealerInsert.rows[0].id;
+
+        if (categories && categories.length > 0) {
+          for (const category of categories) {
+            await client.query(
+              `INSERT INTO dealer_product_categories (dealer_id, category_name, is_active)
+               VALUES ($1, $2, TRUE)`,
+              [dealerId, category]
+            );
+          }
+        }
+
+        await client.query("COMMIT");
+
+        request.adminEntityType = "agro_dealers";
+        request.adminEntityId = dealerId;
+
+        return {
+          success: true,
+          message: "Agro-dealer created successfully.",
+          dealerId
+        };
+      } catch (err: any) {
+        await client.query("ROLLBACK");
+        if (err.code === "23505") { // Unique constraint violation on dealer_phone
+          return reply.status(400).send({
+            success: false,
+            error: { code: "DUPLICATE_PHONE", message: "An agro-dealer with this phone number already exists." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to create agro-dealer." }
+        });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // 20. GET /api/admin/agro-dealers/reconciliation - Calculate pending weekly settlements per dealer
+  fastify.get(
+    "/agro-dealers/reconciliation",
+    async (request, reply) => {
+      request.adminAction = "view_agro_dealer_reconciliations";
+      try {
+        const res = await query(
+          `SELECT 
+             ad.id AS agro_dealer_id,
+             ad.dealer_name,
+             ad.dealer_phone,
+             ad.county_id,
+             ad.transaction_fee_pct,
+             ad.bank_account,
+             COALESCE(SUM(vr.token_amount), 0)::integer AS total_tokens,
+             COALESCE(SUM(vr.kes_value), 0)::numeric AS total_kes_value,
+             COALESCE(SUM(vr.kes_value * (ad.transaction_fee_pct / 100.0)), 0)::numeric AS total_fee_retained,
+             COALESCE(SUM(vr.kes_value * (1.0 - ad.transaction_fee_pct / 100.0)), 0)::numeric AS total_kes_owed
+           FROM agro_dealers ad
+           LEFT JOIN voucher_redemptions vr ON ad.id = vr.agro_dealer_id AND vr.status IN ('scanned', 'redeemed') AND vr.reconciled_at IS NULL
+           GROUP BY ad.id
+           ORDER BY total_kes_owed DESC`
+        );
+        return {
+          success: true,
+          reconciliations: res.rows.map(row => ({
+            ...row,
+            total_tokens: Number(row.total_tokens),
+            total_kes_value: Number(row.total_kes_value),
+            total_fee_retained: Number(row.total_fee_retained),
+            total_kes_owed: Number(row.total_kes_owed)
+          }))
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to calculate weekly settlements." }
+        });
+      }
+    }
+  );
+
+  // 21. PATCH /api/admin/agro-dealers/reconciliation/:id/settle - Settle pending vouchers for a dealer
+  fastify.patch<{ Params: { id: string }; Body: { settlementReference: string } }>(
+    "/agro-dealers/reconciliation/:id/settle",
+    async (request, reply) => {
+      const { id } = request.params;
+      const { settlementReference } = request.body;
+      request.adminAction = "settle_agro_dealer_vouchers";
+      request.adminEntityType = "agro_dealers";
+      request.adminEntityId = id;
+
+      if (!settlementReference || settlementReference.trim().length === 0) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_REFERENCE", message: "settlementReference is required." }
+        });
+      }
+
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // Lock dealer
+        const dealerRes = await client.query(
+          "SELECT id, dealer_name, transaction_fee_pct FROM agro_dealers WHERE id = $1 FOR UPDATE",
+          [id]
+        );
+        if (dealerRes.rows.length === 0) {
+          throw new Error("DEALER_NOT_FOUND");
+        }
+        const dealer = dealerRes.rows[0];
+
+        // Fetch pending vouchers
+        await client.query(
+          `SELECT id FROM voucher_redemptions
+           WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL
+           FOR UPDATE`,
+          [id]
+        );
+
+        const vouchersRes = await client.query(
+          `SELECT COALESCE(SUM(token_amount), 0) AS total_tokens, 
+                  COALESCE(SUM(kes_value), 0) AS total_kes_value
+           FROM voucher_redemptions
+           WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL`,
+          [id]
+        );
+
+        const totalTokens = Number(vouchersRes.rows[0].total_tokens);
+        const totalKesValue = Number(vouchersRes.rows[0].total_kes_value);
+
+        if (totalTokens === 0) {
+          throw new Error("NO_PENDING_VOUCHERS");
+        }
+
+        // Compute net settlement
+        const feePct = Number(dealer.transaction_fee_pct);
+        const netMultiplier = 1.0 - (feePct / 100.0);
+        const totalKesOwed = totalKesValue * netMultiplier;
+
+        // Find period start
+        const lastReconRes = await client.query(
+          "SELECT period_end FROM agro_dealer_reconciliations WHERE agro_dealer_id = $1 ORDER BY period_end DESC LIMIT 1",
+          [id]
+        );
+        const periodStart = lastReconRes.rows.length > 0 
+          ? new Date(lastReconRes.rows[0].period_end) 
+          : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const periodEnd = new Date();
+
+        // Insert reconciliation log
+        await client.query(
+          `INSERT INTO agro_dealer_reconciliations (agro_dealer_id, period_start, period_end, total_tokens, total_kes_owed, settlement_reference, settled_at, status)
+           VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, 'settled')`,
+          [id, periodStart, periodEnd, totalTokens, totalKesOwed, settlementReference.trim()]
+        );
+
+        // Update vouchers
+        await client.query(
+          `UPDATE voucher_redemptions
+           SET status = 'reconciled', reconciled_at = CURRENT_TIMESTAMP
+           WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL`,
+          [id]
+        );
+
+        await client.query("COMMIT");
+
+        return {
+          success: true,
+          message: "Agro-dealer vouchers successfully reconciled and settled.",
+          settledAmountKes: totalKesOwed,
+          totalTokens
+        };
+      } catch (err: any) {
+        await client.query("ROLLBACK");
+        if (err.message === "DEALER_NOT_FOUND") {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "DEALER_NOT_FOUND", message: "Agro-dealer not found." }
+          });
+        }
+        if (err.message === "NO_PENDING_VOUCHERS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "NO_PENDING_VOUCHERS", message: "No pending/unreconciled vouchers found for this dealer." }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to settle agro-dealer vouchers." }
+        });
+      } finally {
+        client.release();
+      }
+    }
+  );
+
+  // 22. GET /api/admin/circle/coordinators - List circle coordinators with decrypted phone/mpesa
+  fastify.get(
+    "/circle/coordinators",
+    async (request, reply) => {
+      request.adminAction = "view_circle_coordinators";
+      try {
+        const res = await query(
+          `SELECT 
+             cc.id,
+             cc.agent_id,
+             cc.county_id,
+             pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS mpesa_number,
+             cc.active_from,
+             cc.active,
+             cc.created_at,
+             u.full_name AS agent_name,
+             u.email AS agent_email,
+             u.telegram_username AS agent_telegram
+           FROM circle_coordinators cc
+           JOIN users u ON cc.agent_id = u.id
+           ORDER BY cc.created_at DESC`,
+          [env.PGCRYPTO_SYMMETRIC_KEY]
+        );
+        return {
+          success: true,
+          coordinators: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve circle coordinators." }
+        });
+      }
+    }
+  );
+
+  // 23. GET /api/admin/circle/agents - List active Data Agents not appointed as coordinators
+  fastify.get<{ Querystring: { county?: string } }>(
+    "/circle/agents",
+    async (request, reply) => {
+      request.adminAction = "view_available_circle_agents";
+      const { county } = request.query;
+      try {
+        const res = await query(
+          `SELECT u.id, u.full_name, u.telegram_username, u.email, u.county
+           FROM users u
+           WHERE u.role = 'agent'
+             AND u.is_active = TRUE
+             AND u.id NOT IN (SELECT agent_id FROM circle_coordinators WHERE active = TRUE)
+             AND ($1::text IS NULL OR u.county = $1)
+           ORDER BY u.full_name ASC`,
+          [county || null]
+        );
+        return {
+          success: true,
+          agents: res.rows
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve available agents." }
+        });
+      }
+    }
+  );
+
+  // 24. GET /api/admin/circle/calculator - Monthly county pool calculator
+  fastify.get(
+    "/circle/calculator",
+    async (request, reply) => {
+      request.adminAction = "view_circle_monthly_pools";
+      try {
+        const res = await query(
+          `SELECT 
+             cc.county_id,
+             cc.id AS coordinator_id,
+             u.full_name AS coordinator_name,
+             pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS coordinator_mpesa,
+             COALESCE(SUM(rr.tokens_spent), 0)::integer AS total_tokens,
+             COALESCE(SUM(rr.amount_kes), 0)::numeric AS total_kes,
+             COUNT(DISTINCT rr.user_id)::integer AS total_users
+           FROM circle_coordinators cc
+           JOIN users u ON cc.agent_id = u.id
+           LEFT JOIN users fu ON fu.county = cc.county_id
+           LEFT JOIN redemption_requests rr ON rr.user_id = fu.id AND rr.redemption_type = 'circle' AND rr.status = 'pending'
+           WHERE cc.active = TRUE
+           GROUP BY cc.county_id, cc.id, u.full_name, cc.mpesa_number
+           ORDER BY total_kes DESC`,
+          [env.PGCRYPTO_SYMMETRIC_KEY]
+        );
+        return {
+          success: true,
+          pools: res.rows.map(row => ({
+            ...row,
+            total_tokens: Number(row.total_tokens),
+            total_kes: Number(row.total_kes),
+            total_users: Number(row.total_users)
+          }))
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to calculate Dira Circle monthly pools." }
+        });
+      }
+    }
+  );
+
+  // 25. POST /api/admin/circle/distributions - Trigger monthly pool aggregation
+  fastify.post<{ Body: { countyId: string; periodMonth?: string } }>(
+    "/circle/distributions",
+    async (request, reply) => {
+      request.adminAction = "process_circle_pool";
+      const { countyId, periodMonth } = request.body;
+
+      if (!countyId) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "countyId is required." }
+        });
+      }
+
+      const dateObj = periodMonth ? new Date(periodMonth) : new Date();
+      dateObj.setUTCDate(1);
+      dateObj.setUTCHours(0, 0, 0, 0);
+
+      try {
+        const result = await diraCircleService.processMonthlyCountyPool(countyId, dateObj);
+
+        // Fetch generated distribution ID
+        const distRes = await query(
+          "SELECT id FROM dira_circle_distributions WHERE county_id = $1 AND period_month = $2 LIMIT 1",
+          [countyId, dateObj]
+        );
+        if (distRes.rows.length > 0) {
+          request.adminEntityType = "dira_circle_distributions";
+          request.adminEntityId = distRes.rows[0].id;
+        }
+
+        return {
+          success: true,
+          message: `Dira Circle pool aggregation processed for county ${countyId}.`,
+          summary: result
+        };
+      } catch (err: any) {
+        if (err.message === "COORDINATOR_NOT_FOUND") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "COORDINATOR_NOT_FOUND", message: `No active coordinator appointed for county: ${countyId}` }
+          });
+        }
+        if (err.message === "NO_PENDING_REDEMPTIONS") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "NO_PENDING_REDEMPTIONS", message: `No pending cash redemptions found for users in county: ${countyId}` }
+          });
+        }
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to process monthly county pool." }
+        });
+      }
+    }
+  );
+
+  // 26. GET /api/admin/circle/distributions/export-instructions - CSV instructions download
+  fastify.get(
+    "/circle/distributions/export-instructions",
+    async (request, reply) => {
+      request.adminAction = "export_circle_instructions";
+      try {
+        const res = await query(
+          `SELECT 
+             u.full_name AS coordinator_name,
+             d.county_id AS county,
+             pgp_sym_decrypt(c.mpesa_number::bytea, $1) AS mpesa_number,
+             d.total_kes_disbursed AS kes_amount
+           FROM dira_circle_distributions d
+           JOIN circle_coordinators c ON d.coordinator_id = c.id
+           JOIN users u ON c.agent_id = u.id
+           WHERE d.status = 'pending'`,
+          [env.PGCRYPTO_SYMMETRIC_KEY]
+        );
+
+        let csv = "Coordinator Name,County,M-Pesa Number,KES Amount\n";
+        const escape = (val: any) => {
+          if (val === null || val === undefined) return "";
+          const str = String(val).replace(/"/g, '""');
+          return str.includes(",") || str.includes("\n") || str.includes('"') ? `"${str}"` : str;
+        };
+
+        for (const row of res.rows) {
+          csv += `${escape(row.coordinator_name)},${escape(row.county)},${escape(row.mpesa_number)},${parseFloat(row.kes_amount).toFixed(2)}\n`;
+        }
+
+        reply
+          .header("Content-Type", "text/csv")
+          .header("Content-Disposition", "attachment; filename=circle-transfer-instructions.csv")
+          .send(csv);
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to export transfer instructions." }
+        });
+      }
+    }
+  );
+
+  // 27. GET /api/admin/mpesa-settings - Read settings & environment variable flag
+  fastify.get(
+    "/mpesa-settings",
+    async (request, reply) => {
+      request.adminAction = "view_mpesa_settings";
+      try {
+        const settingsRes = await query("SELECT key, value FROM mpesa_activation_settings");
+        const settings: Record<string, boolean> = {};
+        for (const row of settingsRes.rows) {
+          settings[row.key] = row.value;
+        }
+
+        return {
+          success: true,
+          darajaProductionActive: env.DARAJA_PRODUCTION_ACTIVE,
+          settings
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve M-Pesa settings." }
+        });
+      }
+    }
+  );
+
+  // 28. PATCH /api/admin/mpesa-settings - Update DB settings (does not touch env flag)
+  fastify.patch<{ Body: { key: string; value: boolean } }>(
+    "/mpesa-settings",
+    async (request, reply) => {
+      request.adminAction = "update_mpesa_settings";
+      const { key, value } = request.body;
+
+      if (!key || value === undefined) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "MISSING_FIELDS", message: "key and value are required." }
+        });
+      }
+
+      const allowedKeys = ["daraja_credentials_approved", "first_b2b_revenue_received"];
+      if (!allowedKeys.includes(key)) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "INVALID_KEY", message: `Key must be one of: ${allowedKeys.join(", ")}` }
+        });
+      }
+
+      try {
+        await query(
+          `INSERT INTO mpesa_activation_settings (key, value, updated_at)
+           VALUES ($1, $2, CURRENT_TIMESTAMP)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP`,
+          [key, value]
+        );
+
+        request.adminEntityType = "mpesa_activation_settings";
+        request.adminEntityId = undefined;
+        request.adminMetadata = { key, value };
+
+        return {
+          success: true,
+          message: `Successfully updated ${key} to ${value}.`
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to update M-Pesa settings." }
+        });
+      }
+    }
+  );
+
+  // 29. POST /api/admin/redemptions/:id/retry - Re-deduct and re-trigger failed M-Pesa redemptions
+  fastify.post<{ Params: { id: string } }>(
+    "/redemptions/:id/retry",
+    async (request, reply) => {
+      const { id } = request.params;
+      request.adminAction = "retry_mpesa_redemption";
+      request.adminEntityType = "redemption_requests";
+      request.adminEntityId = id;
+
+      try {
+        // 1. Fetch original redemption request & decrypt phone number
+        const reqRes = await query(
+          `SELECT id, user_id, tokens_spent, amount_kes, status,
+                  pgp_sym_decrypt(phone_number::bytea, $1) AS decrypted_phone
+           FROM redemption_requests
+           WHERE id = $2 AND redemption_type = 'mpesa'`,
+          [env.PGCRYPTO_SYMMETRIC_KEY, id]
+        );
+
+        if (reqRes.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "NOT_FOUND", message: "M-Pesa redemption request not found." }
+          });
+        }
+
+        const redemption = reqRes.rows[0];
+
+        if (redemption.status !== "failed") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INVALID_STATUS", message: "Only failed redemption requests can be retried." }
+          });
+        }
+
+        // 2. Validate current user balance
+        const userId = redemption.user_id;
+        const tokensSpent = Number(redemption.tokens_spent);
+        const amountKes = Number(redemption.amount_kes);
+        const phone = redemption.decrypted_phone;
+
+        const { balance } = await tokenService.getBalance(userId);
+        if (balance < tokensSpent) {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: `User balance (${balance}) is insufficient to cover the retry amount (${tokensSpent}).` }
+          });
+        }
+
+        // 3. Deduct tokens from user's ledger (deduct-first pattern)
+        try {
+          await tokenService.deductTokens(userId, tokensSpent, "redeem_mpesa", id);
+        } catch (err: any) {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "INSUFFICIENT_TOKENS", message: "Failed to deduct tokens from user balance." }
+          });
+        }
+
+        // 4. Trigger B2C payout request via Safaricom Daraja
+        const triggerRes = await paymentService.triggerMpesaB2C(phone, amountKes);
+
+        if (triggerRes.success && triggerRes.conversationId) {
+          // 5. Update request status to 'processing' and save ConversationID
+          await query(
+            `UPDATE redemption_requests
+             SET status = 'processing',
+                 at_transaction_id = $1,
+                 failure_reason = NULL,
+                 completed_at = NULL
+             WHERE id = $2`,
+            [triggerRes.conversationId, id]
+          );
+
+          return {
+            success: true,
+            message: "M-Pesa retry successfully initiated. Processing callback.",
+            conversationId: triggerRes.conversationId
+          };
+        } else {
+          const errMsg = triggerRes.errorMessage || "Failed to trigger Safaricom Daraja request";
+          
+          // Roll back: credit tokens back to the user
+          await tokenService.creditTokens(
+            userId,
+            tokensSpent,
+            "adjustment",
+            id,
+            `M-Pesa retry failed refund: ${errMsg}`
+          );
+
+          // Update failure reason in db
+          await query(
+            `UPDATE redemption_requests
+             SET failure_reason = $1
+             WHERE id = $2`,
+            [`Retry failed: ${errMsg}`, id]
+          );
+
+          return reply.status(500).send({
+            success: false,
+            error: { code: "MPESA_RETRY_FAILED", message: errMsg }
+          });
+        }
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retry M-Pesa redemption." }
+        });
+      }
+    }
+  );
+
+  // 30. GET /api/admin/reports/token-economic-activity - Token Economic Activity Report (Annex A)
+  fastify.get(
+    "/reports/token-economic-activity",
+    async (request, reply) => {
+      request.adminAction = "export_token_economic_report";
+      const { startDate, endDate, format = "json" } = request.query as any;
+
+      const start = startDate ? new Date(startDate) : null;
+      const end = endDate ? new Date(endDate) : null;
+
+      try {
+        // 1. Summary statistics
+        const earnedRes = await query(
+          `SELECT COALESCE(SUM(amount), 0)::integer AS total
+           FROM token_ledger
+           WHERE amount > 0
+             AND ($1::timestamptz IS NULL OR created_at >= $1)
+             AND ($2::timestamptz IS NULL OR created_at <= $2)`,
+          [start, end]
+        );
+        const totalEarned = Number(earnedRes.rows[0].total);
+
+        const redeemedRes = await query(
+          `SELECT COALESCE(SUM(tokens_spent), 0)::integer AS total,
+                  COALESCE(SUM(amount_kes), 0)::numeric AS total_kes
+           FROM redemption_requests
+           WHERE status = 'completed'
+             AND ($1::timestamptz IS NULL OR initiated_at >= $1)
+             AND ($2::timestamptz IS NULL OR initiated_at <= $2)`,
+          [start, end]
+        );
+        const totalRedeemed = Number(redeemedRes.rows[0].total);
+        const totalKesDisbursed = Number(redeemedRes.rows[0].total_kes);
+
+        const uniqueEarnersRes = await query(
+          `SELECT COUNT(DISTINCT user_id)::integer AS count
+           FROM token_ledger
+           WHERE amount > 0
+             AND ($1::timestamptz IS NULL OR created_at >= $1)
+             AND ($2::timestamptz IS NULL OR created_at <= $2)`,
+          [start, end]
+        );
+        const uniqueEarners = Number(uniqueEarnersRes.rows[0].count);
+
+        const uniqueRedeemersRes = await query(
+          `SELECT COUNT(DISTINCT user_id)::integer AS count
+           FROM redemption_requests
+           WHERE status = 'completed'
+             AND ($1::timestamptz IS NULL OR initiated_at >= $1)
+             AND ($2::timestamptz IS NULL OR initiated_at <= $2)`,
+          [start, end]
+        );
+        const uniqueRedeemers = Number(uniqueRedeemersRes.rows[0].count);
+
+        // Conversion velocity (average days to redeem)
+        const velocityRes = await query(
+          `SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (rr.initiated_at - tl.created_at)) / 86400.0), 0)::numeric AS avg_days
+           FROM redemption_requests rr
+           JOIN LATERAL (
+             SELECT created_at 
+             FROM token_ledger 
+             WHERE user_id = rr.user_id 
+               AND amount > 0 
+               AND created_at <= rr.initiated_at
+             ORDER BY created_at DESC 
+             LIMIT 1
+           ) tl ON TRUE
+           WHERE rr.status = 'completed'
+             AND ($1::timestamptz IS NULL OR rr.initiated_at >= $1)
+             AND ($2::timestamptz IS NULL OR rr.initiated_at <= $2)`,
+          [start, end]
+        );
+        const conversionVelocity = Number(velocityRes.rows[0].avg_days);
+
+        const summary = {
+          totalEarned,
+          totalRedeemed,
+          totalKesDisbursed,
+          uniqueEarners,
+          uniqueRedeemers,
+          conversionVelocity
+        };
+
+        // 2. Earning breakdown by type
+        const earnedBreakdownRes = await query(
+          `SELECT transaction_type::text AS type, COALESCE(SUM(amount), 0)::integer AS tokens
+           FROM token_ledger
+           WHERE amount > 0
+             AND ($1::timestamptz IS NULL OR created_at >= $1)
+             AND ($2::timestamptz IS NULL OR created_at <= $2)
+           GROUP BY transaction_type
+           ORDER BY tokens DESC`,
+          [start, end]
+        );
+        const earnedBreakdown = earnedBreakdownRes.rows;
+
+        // 3. Redemption breakdown by layer/type
+        const redeemedBreakdownRes = await query(
+          `SELECT redemption_type::text AS type, 
+                  COALESCE(SUM(tokens_spent), 0)::integer AS tokens,
+                  COALESCE(SUM(amount_kes), 0)::numeric AS kes
+           FROM redemption_requests
+           WHERE status = 'completed'
+             AND ($1::timestamptz IS NULL OR initiated_at >= $1)
+             AND ($2::timestamptz IS NULL OR initiated_at <= $2)
+           GROUP BY redemption_type
+           ORDER BY tokens DESC`,
+          [start, end]
+        );
+        const redeemedBreakdown = redeemedBreakdownRes.rows.map(row => ({
+          ...row,
+          tokens: Number(row.tokens),
+          kes: Number(row.kes)
+        }));
+
+        // 4. County performance breakdown (CTE approach to prevent Cartesian product)
+        const countyBreakdownRes = await query(
+          `WITH county_earns AS (
+             SELECT 
+               u.county,
+               COALESCE(SUM(tl.amount), 0)::integer AS tokens_earned,
+               COUNT(DISTINCT tl.user_id)::integer AS unique_earners
+             FROM users u
+             JOIN token_ledger tl ON u.id = tl.user_id
+             WHERE tl.amount > 0
+               AND ($1::timestamptz IS NULL OR tl.created_at >= $1)
+               AND ($2::timestamptz IS NULL OR tl.created_at <= $2)
+             GROUP BY u.county
+           ),
+           county_redeems AS (
+             SELECT 
+               u.county,
+               COALESCE(SUM(rr.tokens_spent), 0)::integer AS tokens_redeemed,
+               COALESCE(SUM(rr.amount_kes), 0)::numeric AS kes_disbursed,
+               COUNT(DISTINCT rr.user_id)::integer AS unique_redeemers
+             FROM users u
+             JOIN redemption_requests rr ON u.id = rr.user_id
+             WHERE rr.status = 'completed'
+               AND ($1::timestamptz IS NULL OR rr.initiated_at >= $1)
+               AND ($2::timestamptz IS NULL OR rr.initiated_at <= $2)
+             GROUP BY u.county
+           )
+           SELECT 
+             COALESCE(e.county, r.county, 'Unknown') AS county,
+             COALESCE(e.tokens_earned, 0)::integer AS tokens_earned,
+             COALESCE(e.unique_earners, 0)::integer AS unique_earners,
+             COALESCE(r.tokens_redeemed, 0)::integer AS tokens_redeemed,
+             COALESCE(r.kes_disbursed, 0)::numeric AS kes_disbursed,
+             COALESCE(r.unique_redeemers, 0)::integer AS unique_redeemers
+           FROM county_earns e
+           FULL OUTER JOIN county_redeems r ON e.county = r.county
+           ORDER BY tokens_earned DESC`,
+          [start, end]
+        );
+        const countyBreakdown = countyBreakdownRes.rows.map(row => ({
+          ...row,
+          tokens_earned: Number(row.tokens_earned),
+          unique_earners: Number(row.unique_earners),
+          tokens_redeemed: Number(row.tokens_redeemed),
+          kes_disbursed: Number(row.kes_disbursed),
+          unique_redeemers: Number(row.unique_redeemers)
+        }));
+
+        if (format === "csv") {
+          let csv = "SECTION: Token Economic Activity Summary\nMetric,Value\n";
+          csv += `Total Tokens Earned,${summary.totalEarned}\n`;
+          csv += `Total Tokens Redeemed,${summary.totalRedeemed}\n`;
+          csv += `Total KES Disbursed,${parseFloat(String(summary.totalKesDisbursed)).toFixed(2)}\n`;
+          csv += `Unique Earners,${summary.uniqueEarners}\n`;
+          csv += `Unique Redeemers,${summary.uniqueRedeemers}\n`;
+          csv += `Average Conversion Velocity (Days),${parseFloat(String(summary.conversionVelocity)).toFixed(2)}\n`;
+
+          csv += "\nSECTION: Tokens Earned by Activity Type\nActivity Type,Tokens Earned\n";
+          for (const row of earnedBreakdown) {
+            csv += `${escape(row.type)},${escape(row.tokens)}\n`;
+          }
+
+          csv += "\nSECTION: Tokens Redeemed by Layer\nRedemption Layer,Tokens Spent,KES Disbursed\n";
+          for (const row of redeemedBreakdown) {
+            csv += `${escape(row.type)},${escape(row.tokens)},${parseFloat(String(row.kes)).toFixed(2)}\n`;
+          }
+
+          csv += "\nSECTION: County Performance Breakdown\nCounty,Tokens Earned,Unique Earners,Tokens Redeemed,KES Disbursed,Unique Redeemers\n";
+          for (const row of countyBreakdown) {
+            csv += `${escape(row.county)},${escape(row.tokens_earned)},${escape(row.unique_earners)},${escape(row.tokens_redeemed)},${parseFloat(String(row.kes_disbursed)).toFixed(2)},${escape(row.unique_redeemers)}\n`;
+          }
+
+          reply
+            .header("Content-Type", "text/csv")
+            .header("Content-Disposition", "attachment; filename=token-economic-activity.csv")
+            .send(csv);
+        } else {
+          return {
+            success: true,
+            summary,
+            earnedBreakdown,
+            redeemedBreakdown,
+            countyBreakdown
           };
         }
       } catch (err: any) {

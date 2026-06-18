@@ -54,4 +54,4 @@ const queueOptions: QueueOptions = {
 export const photoVerificationQueue = new Queue("photo-verification", queueOptions);
 export const atmosphericVerificationQueue = new Queue("atmospheric-verification", queueOptions);
 export const notificationsQueue = new Queue("notifications", queueOptions);
-export const midnightAnchorQueue = new Queue("midnight-anchor", queueOptions);
+export const xionAnchorQueue = new Queue("xion-anchor", queueOptions);

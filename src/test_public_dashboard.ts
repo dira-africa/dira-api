@@ -84,7 +84,7 @@ async function runTests() {
 
     console.log("Cleaning up previous test data...");
     await pool.query("DELETE FROM redemption_requests");
-    await pool.query("DELETE FROM midnight_anchors");
+    await pool.query("DELETE FROM xion_anchors");
     await pool.query("DELETE FROM crop_submissions");
     await pool.query("DELETE FROM farms");
     await pool.query("DELETE FROM atmospheric_readings");
@@ -160,10 +160,10 @@ async function runTests() {
       [farmerId, encryptionKey]
     );
 
-    // Seed Midnight anchors
+    // Seed XION anchors
     await pool.query(
-      `INSERT INTO midnight_anchors (week_number, batch_hash, data_point_count, midnight_tx_hash, anchored_at)
-       VALUES (202622, 'b67549b28ee4f25b417c237a2a67d98cce6316cba2ead4ee15391dce704ff714', 5, '0xanchor_tx_b98de253310ea19517c336eda6dd40d0', CURRENT_TIMESTAMP)`
+      `INSERT INTO xion_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
+       VALUES (202622, 'b67549b28ee4f25b417c237a2a67d98cce6316cba2ead4ee15391dce704ff714', 5, '0xanchor_tx_b98de253310ea19517c336eda6dd40d0', 'zkv_p_1', 'zkv_tx_1', CURRENT_TIMESTAMP)`
     );
 
     // Clear any existing redis public keys for test consistency
@@ -173,7 +173,7 @@ async function runTests() {
       await redis.del("dira:public:circular-economy-summary");
       await redis.del("dira:public:activity-feed");
       await redis.del("dira:public:quality-metrics");
-      await redis.del("dira:public:midnight-anchors");
+      await redis.del("dira:public:xion-anchors");
     }
 
     console.log("\n--- TEST 1: GET /public/stats ---");
@@ -260,17 +260,17 @@ async function runTests() {
     }
     console.log("✅ Test 5 passed!");
 
-    console.log("\n--- TEST 6: GET /public/midnight-anchors ---");
-    const anchorRes = await server.inject({ method: "GET", url: "/public/midnight-anchors" });
+    console.log("\n--- TEST 6: GET /public/xion-anchors ---");
+    const anchorRes = await server.inject({ method: "GET", url: "/public/xion-anchors" });
     console.log("Anchors Status:", anchorRes.statusCode);
     const anchorBody = JSON.parse(anchorRes.payload);
     console.log("Anchors Response:", anchorBody.anchors);
     if (anchorRes.statusCode !== 200 || !anchorBody.success || anchorBody.anchors.length === 0) {
-      throw new Error("Midnight anchors endpoint failed.");
+      throw new Error("XION anchors endpoint failed.");
     }
     const anchor = anchorBody.anchors[0];
-    if (anchor.weekNumber !== 202622 || anchor.batchHash !== 'b67549b28ee4f25b417c237a2a67d98cce6316cba2ead4ee15391dce704ff714' || !anchor.midnightTxHash) {
-      throw new Error("Midnight anchor details mismatch.");
+    if (anchor.weekNumber !== 202622 || anchor.batchHash !== 'b67549b28ee4f25b417c237a2a67d98cce6316cba2ead4ee15391dce704ff714' || !anchor.xionTxHash) {
+      throw new Error("XION anchor details mismatch.");
     }
     console.log("✅ Test 6 passed!");
 

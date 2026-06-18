@@ -2,6 +2,7 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import crypto from "crypto";
 import { env } from "../config/env";
 import { query } from "../db/query";
+import { sanitizeString } from "../lib/sanitize";
 
 interface TelegramAuthBody {
   initData: string;
@@ -18,9 +19,18 @@ export default async function authRoutes(fastify: FastifyInstance) {
           timeWindow: "1 minute",
         },
       },
+      schema: {
+        body: {
+          type: "object",
+          required: ["initData"],
+          properties: {
+            initData: { type: "string", maxLength: 4096 }
+          }
+        }
+      }
     },
     async (request, reply) => {
-      const { initData } = request.body;
+      const initData = sanitizeString(request.body.initData);
 
       if (!initData) {
         await query(
@@ -223,13 +233,14 @@ export default async function authRoutes(fastify: FastifyInstance) {
       role?: "farmer" | "agent" | "admin";
       fullName?: string;
       county?: string;
+      privacyPolicyAccepted?: boolean;
     };
   }>(
     "/profile",
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
       const userId = request.user.id;
-      const { language, role, fullName, county } = request.body;
+      const { language, role, fullName, county, privacyPolicyAccepted } = request.body;
 
       try {
         const userRes = await query("SELECT * FROM users WHERE id = $1", [userId]);
@@ -247,13 +258,25 @@ export default async function authRoutes(fastify: FastifyInstance) {
         const updatedFullName = fullName !== undefined ? fullName : currentUser.full_name;
         const updatedCounty = county !== undefined ? county : currentUser.county;
 
-        const updateRes = await query(
-          `UPDATE users 
-           SET language = $1, role = $2, full_name = $3, county = $4, updated_at = CURRENT_TIMESTAMP 
-           WHERE id = $5 
-           RETURNING id, full_name, role, language, county`,
-          [updatedLanguage, updatedRole, updatedFullName, updatedCounty, userId]
-        );
+        let updateRes;
+        if (privacyPolicyAccepted) {
+          updateRes = await query(
+            `UPDATE users 
+             SET language = $1, role = $2, full_name = $3, county = $4, 
+                 privacy_policy_accepted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $5 
+             RETURNING id, full_name, role, language, county`,
+            [updatedLanguage, updatedRole, updatedFullName, updatedCounty, userId]
+          );
+        } else {
+          updateRes = await query(
+            `UPDATE users 
+             SET language = $1, role = $2, full_name = $3, county = $4, updated_at = CURRENT_TIMESTAMP 
+             WHERE id = $5 
+             RETURNING id, full_name, role, language, county`,
+            [updatedLanguage, updatedRole, updatedFullName, updatedCounty, userId]
+          );
+        }
 
         const updatedUser = updateRes.rows[0];
 
@@ -277,6 +300,27 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to update profile." }
+        });
+      }
+    }
+  );
+
+  // POST /auth/consent
+  fastify.post(
+    "/consent",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      try {
+        await query(
+          "UPDATE users SET privacy_policy_accepted_at = CURRENT_TIMESTAMP WHERE id = $1",
+          [userId]
+        );
+        return { success: true, message: "Privacy policy consent recorded successfully." };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to save consent." }
         });
       }
     }

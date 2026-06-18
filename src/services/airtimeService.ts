@@ -49,7 +49,9 @@ export class AirtimeService {
 
     const formattedPhoneNumber = phoneNumber.startsWith("0")
       ? `+254${phoneNumber.substring(1)}`
-      : phoneNumber;
+      : phoneNumber.startsWith("+")
+        ? phoneNumber
+        : `+${phoneNumber}`;
 
     const kesAmount = tokenAmount * 0.55;
 

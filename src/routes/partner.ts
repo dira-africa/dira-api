@@ -48,6 +48,13 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
     "/vouchers/validate",
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
+      if (!env.VOUCHERS_ACTIVE) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VOUCHER_NOT_YET_ACTIVE", message: "Agro-dealer vouchers are not yet active." }
+        });
+      }
+
       const userId = request.user.id;
       const userRole = request.user.role;
       const { voucherCode, qrHash } = request.body;
@@ -97,18 +104,19 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
     "/vouchers/redeem",
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
+      if (!env.VOUCHERS_ACTIVE) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VOUCHER_NOT_YET_ACTIVE", message: "Agro-dealer vouchers are not yet active." }
+        });
+      }
+
       const userId = request.user.id;
       const userRole = request.user.role;
       const { voucherCode, qrHash, agroDealerId } = request.body;
 
-      // Determine the scanning agro-dealer ID
-      let dealerId = agroDealerId || null;
-      if (!dealerId) {
-        dealerId = await getLinkedDealerId(userId);
-      }
-
-      // Auth check: must be admin or a linked active dealer
-      if (!dealerId && userRole !== "admin") {
+      const linkedDealerId = await getLinkedDealerId(userId);
+      if (userRole !== "admin" && (!linkedDealerId || (agroDealerId && linkedDealerId !== agroDealerId))) {
         return reply.status(403).send({
           success: false,
           error: { code: "FORBIDDEN", message: "You do not have permission to access this resource." }
@@ -123,12 +131,7 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        // Determine the scanning agro-dealer ID
-        let dealerId = agroDealerId || null;
-        if (!dealerId) {
-          dealerId = await getLinkedDealerId(userId);
-        }
-
+        const dealerId = userRole === "admin" ? (agroDealerId || linkedDealerId) : linkedDealerId;
         if (!dealerId) {
           return reply.status(403).send({
             success: false,
@@ -205,6 +208,13 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
     "/voucher/scan",
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
+      if (!env.VOUCHERS_ACTIVE) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VOUCHER_NOT_YET_ACTIVE", message: "Agro-dealer vouchers are not yet active." }
+        });
+      }
+
       const userId = request.user.id;
       const userRole = request.user.role;
       const { qrPayload, agroDealerId } = request.body;
@@ -216,12 +226,16 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
         });
       }
 
-      let dealerId = agroDealerId || null;
-      if (!dealerId) {
-        dealerId = await getLinkedDealerId(userId);
+      const linkedDealerId = await getLinkedDealerId(userId);
+      if (userRole !== "admin" && (!linkedDealerId || (agroDealerId && linkedDealerId !== agroDealerId))) {
+        return reply.status(403).send({
+          success: false,
+          error: { code: "FORBIDDEN", message: "You do not have permission to scan vouchers." }
+        });
       }
 
-      if (!dealerId && userRole !== "admin") {
+      const dealerId = userRole === "admin" ? (agroDealerId || linkedDealerId) : linkedDealerId;
+      if (!dealerId) {
         return reply.status(403).send({
           success: false,
           error: { code: "FORBIDDEN", message: "You do not have permission to scan vouchers." }
@@ -229,7 +243,7 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        const result = await voucherService.scanVoucher(qrPayload, dealerId!);
+        const result = await voucherService.scanVoucher(qrPayload, dealerId);
         return result;
       } catch (err: any) {
         const code = err.message || "REDEMPTION_FAILED";
@@ -247,6 +261,12 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
     "/voucher/scan",
     { preHandler: [verifyDealerApiToken] },
     async (request, reply) => {
+      if (!env.VOUCHERS_ACTIVE) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VOUCHER_NOT_YET_ACTIVE", message: "Agro-dealer vouchers are not yet active." }
+        });
+      }
       const res = await query(
         `SELECT id, farmer_id, token_amount, kes_value, voucher_code, expires_at, scanned_at, status 
          FROM voucher_redemptions 

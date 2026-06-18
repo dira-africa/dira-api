@@ -18,8 +18,14 @@ export function errorHandler(
     code = "VALIDATION_ERROR";
     message = error.message;
   } else if (statusCode === 429) {
-    code = "TOO_MANY_REQUESTS";
-    message = "Rate limit exceeded. Please try again shortly.";
+    code = error.code || "TOO_MANY_REQUESTS";
+    message = error.message || "Rate limit exceeded. Please try again later. / Umefikia kikomo cha maombi. Tafadhali jaribu tena baadaye.";
+    if (message.includes("Rate limit exceeded") || message.includes("Rate limit") || message.includes("Too many")) {
+      message = "Rate limit exceeded. Please try again later. / Umefikia kikomo cha maombi. Tafadhali jaribu tena baadaye.";
+    }
+    const retryAfter = reply.getHeader("retry-after") || reply.getHeader("Retry-After") || "60";
+    reply.header("Retry-After", String(retryAfter));
+
     if (request.url.includes("/auth/telegram")) {
       query(
         `INSERT INTO audit_log (action, entity_type, ip_address, user_agent, metadata)

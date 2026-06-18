@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "migrate": "ts-node src/db/migrate.ts",
     "create-admin": "tsx src/scripts/create-admin.ts",
-    "test:midnight": "tsx src/test_midnight_jobs.ts"
+    "test:xion": "tsx src/test_xion_jobs.ts"
   },
   "keywords": [
     "fastify",

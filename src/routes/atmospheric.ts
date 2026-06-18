@@ -34,7 +34,33 @@ export default async function atmosphericRoutes(fastify: FastifyInstance) {
   
   fastify.post<{ Body: AtmosphericSubmitBody }>(
     "/submit",
-    { onRequest: [fastify.authenticate, fastify.requireRole(["agent"])] },
+    {
+      onRequest: [fastify.authenticate, fastify.requireRole(["agent"])],
+      config: {
+        rateLimit: {
+          max: 4,
+          timeWindow: "24 hours",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+        },
+      },
+      schema: {
+        body: {
+          type: "object",
+          required: ["pressure_hpa", "latitude", "longitude", "altitude_m", "accuracy_m", "sensor_type"],
+          properties: {
+            pressure_hpa: { type: "number", minimum: 870, maximum: 1084 },
+            latitude: { type: "number", minimum: -4.67, maximum: 4.62 },
+            longitude: { type: "number", minimum: 33.9, maximum: 41.9 },
+            altitude_m: { type: "number" },
+            accuracy_m: { type: "number" },
+            sensor_type: { type: "string" },
+            timestamp: { type: "string" },
+            temperature_c: { type: "number" },
+            humidity_pct: { type: "number" }
+          }
+        }
+      }
+    },
     async (request, reply) => {
       const userId = request.user.id;
       const {
@@ -83,13 +109,15 @@ export default async function atmosphericRoutes(fastify: FastifyInstance) {
         const syncsCount = Number(todaySyncsRes.rows[0].count);
 
         if (syncsCount >= 4) {
-          return reply.status(429).send({
-            success: false,
-            error: {
-              code: "DAILY_LIMIT_REACHED",
-              message: "Maximum 4 sync submissions per day per user."
-            }
-          });
+          const err = new Error("Rate limit exceeded. Please try again later. / Umefikia kikomo cha maombi. Tafadhali jaribu tena baadaye.") as any;
+          err.statusCode = 429;
+          err.code = "DAILY_LIMIT_REACHED";
+          
+          const now = new Date();
+          const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0);
+          const secondsUntilMidnight = Math.max(0, Math.ceil((midnight.getTime() - now.getTime()) / 1000));
+          reply.header("Retry-After", String(secondsUntilMidnight));
+          throw err;
         }
 
         const recordedAtDate = new Date(timestamp || new Date());

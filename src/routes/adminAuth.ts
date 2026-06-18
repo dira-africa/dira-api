@@ -15,11 +15,19 @@
  */
 
 import { FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import bcryptjs from "bcryptjs";
 import { query } from "../db/query";
 import { redis } from "../db/redis";
 
 export default async function adminAuthRoutes(fastify: FastifyInstance) {
+  await fastify.register(rateLimit, {
+    max: 30,
+    timeWindow: "1 minute",
+    groupId: "admin-group",
+    keyGenerator: (request: any) => request.ip,
+  } as any);
+
   // POST /admin/auth/login - Gated by IP-based rate limiting (5 requests per 15 minutes)
   fastify.post<{ Body: { email?: string; password?: string } }>(
     "/login",

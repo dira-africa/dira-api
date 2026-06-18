@@ -6,10 +6,11 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-4.x-black.svg)](https://fastify.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
-[![Midnight](https://img.shields.io/badge/Midnight-Mainnet-1A1A6E.svg)](https://midnight.network/)
+[![XION](https://img.shields.io/badge/XION-Mainnet-orange.svg)](https://xion.burnt.com/)
+[![zkVerify](https://img.shields.io/badge/zkVerify-Mainnet-purple.svg)](https://zkverify.io/)
 [![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
-The Fastify REST API that powers the Dira platform. Handles all authentication, data ingestion, AI crop verification, atmospheric triangulation, the four-layer circular economy payment system, Telegram bot notifications, and the Midnight blockchain anchoring service.
+The Fastify REST API that powers the Dira platform. Handles all authentication, data ingestion, AI crop verification, atmospheric triangulation, the four-layer circular economy payment system, Telegram bot notifications, and the XION and zkVerify blockchain anchoring services.
 
 ---
 
@@ -18,7 +19,7 @@ The Fastify REST API that powers the Dira platform. Handles all authentication, 
 | Path | Purpose |
 |---|---|
 | `/src/routes/` | One file per feature module |
-| `/src/services/` | Business logic — token, airtime, voucher, circle, payment, AI, triangulation, Midnight, notification |
+| `/src/services/` | Business logic — token, airtime, voucher, circle, payment, AI, triangulation, XION & zkVerify, notification |
 | `/src/jobs/` | BullMQ job definitions and workers |
 | `/src/db/` | PostgreSQL plugin, 15 migration files, migration runner |
 | `/src/plugins/` | Fastify plugins — database, JWT auth, rate limiting |
@@ -41,7 +42,7 @@ The Fastify REST API that powers the Dira platform. Handles all authentication, 
 - **Payment Layer 2:** Farm input voucher QR codes (HMAC-SHA256 signed)
 - **Payment Layer 3:** Dira Circle (county-level community cash pool — one bank transfer per county per month)
 - **Payment Layer 4:** Safaricom Daraja B2C (M-Pesa — flag-gated behind `DARAJA_PRODUCTION_ACTIVE`)
-- **Blockchain:** Midnight (weekly batch anchoring via `DiraDataAnchor.compact`)
+- **Blockchain:** XION & zkVerify (weekly batch anchoring and ZK validation)
 - **Notifications:** Telegram Bot API
 - **Deployment:** Coolify on Hetzner, Dockerised
 
@@ -148,13 +149,15 @@ Full OpenAPI 3.0 specification lives in [`dira-docs`](https://github.com/dira-af
 
 ## Database schema
 
-The database uses 15 sequential migration files:
+The database uses sequential migration files:
 
-| Range | Tables |
+| Range | Tables / Features |
 |---|---|
 | 001–010 | Core platform: extensions, users, farms, agent_profiles, atmospheric_readings, crop_submissions, token_ledger, api_clients, audit_log, redemption_requests |
-| 011–012 | Midnight: midnight_anchors, midnight_certificates |
+| 011–012 | Midnight blockchain anchors (legacy tables) |
 | 013–015 | Circular economy: agro_dealers, voucher_redemptions, agro_dealer_reconciliations, circle_coordinators, dira_circle_distributions, dealer_product_categories |
+| 016–019 | Consent tracking, verification status, admin authentication, review fields, and M-Pesa settings |
+| 020 | XION & zkVerify blockchain anchoring (xion_anchors, xion_certificates) |
 
 All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table has a database-level `CHECK (balance_after >= 0)` constraint — negative balances cannot exist even if application code has a bug.
 
@@ -189,7 +192,7 @@ Key variables — see `.env.example` for the complete list:
 | `DIRA_CIRCLE_ACTIVE` | `false` | Set `true` only when first county coordinator is confirmed |
 | `VOUCHER_SIGNING_SECRET` | — | Minimum 32 characters. Server refuses to start if shorter. |
 | `PGCRYPTO_SYMMETRIC_KEY` | — | Used to encrypt phone numbers at rest. Never stored in DB. |
-| `MIDNIGHT_NETWORK` | `testnet` | Change to `mainnet` only after external contract audit passes |
+| `XION_NETWORK` | `testnet` | XION network node configuration |
 
 ---
 
@@ -222,7 +225,7 @@ PRs touching payment flows require two reviewer approvals. For security vulnerab
 |---|---|
 | [`dira-core`](https://github.com/dira-africa/dira-core) | Telegram Mini App frontend |
 | [`dira-docs`](https://github.com/dira-africa/dira-docs) | OpenAPI specs, API documentation, reviewer guide |
-| [`dira-contracts`](https://github.com/dira-africa/dira-contracts) | Compact smart contracts for Midnight blockchain |
+| [`dira-contracts`](https://github.com/dira-africa/dira-contracts) | CosmWasm smart contracts for XION plus zkVerify ZK circuits |
 
 ---
 

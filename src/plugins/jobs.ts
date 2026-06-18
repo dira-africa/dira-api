@@ -21,13 +21,13 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  midnightAnchorQueue
+  xionAnchorQueue
 } from "../jobs/queues";
 import {
   photoVerificationWorker,
   atmosphericVerificationWorker,
   notificationsWorker,
-  midnightAnchorWorker
+  xionAnchorWorker
 } from "../jobs/workers";
 
 declare module "fastify" {
@@ -35,7 +35,7 @@ declare module "fastify" {
     photoVerificationQueue: Queue;
     atmosphericVerificationQueue: Queue;
     notificationsQueue: Queue;
-    midnightAnchorQueue: Queue;
+    xionAnchorQueue: Queue;
     // Keep compatibility helper jobsQueue targeting the photoVerificationQueue
     jobsQueue: Queue;
   }
@@ -46,7 +46,7 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.decorate("photoVerificationQueue", photoVerificationQueue);
   fastify.decorate("atmosphericVerificationQueue", atmosphericVerificationQueue);
   fastify.decorate("notificationsQueue", notificationsQueue);
-  fastify.decorate("midnightAnchorQueue", midnightAnchorQueue);
+  fastify.decorate("xionAnchorQueue", xionAnchorQueue);
   
   // Keep compatibility decorator
   fastify.decorate("jobsQueue", photoVerificationQueue);
@@ -55,19 +55,39 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
   // Setup repeatable schedules on respective queues
   try {
-    // A. Weekly Midnight Anchoring repeatable job (runs daily at midnight to find completed weeks)
-    const midnightRepeatable = await midnightAnchorQueue.getRepeatableJobs();
-    for (const rJob of midnightRepeatable) {
-      await midnightAnchorQueue.removeRepeatableByKey(rJob.key);
+    // A. Weekly XION Anchoring repeatable job (runs daily at midnight to find completed weeks)
+    const xionRepeatable = await xionAnchorQueue.getRepeatableJobs();
+    for (const rJob of xionRepeatable) {
+      if (rJob.name === "xion-weekly-anchoring") {
+        await xionAnchorQueue.removeRepeatableByKey(rJob.key);
+      }
     }
-    await midnightAnchorQueue.add(
-      "midnight-weekly-anchoring",
+    await xionAnchorQueue.add(
+      "xion-weekly-anchoring",
       {},
       {
         repeat: {
           pattern: "0 0 * * *", // Daily at midnight
         },
-        jobId: "midnight-weekly-anchoring-job"
+        jobId: "xion-weekly-anchoring-job"
+      }
+    );
+
+    // Nightly DPA Compliance cleanup job (runs daily at 2am EAT)
+    for (const rJob of xionRepeatable) {
+      if (rJob.name === "nightly-dpa-cleanup") {
+        await xionAnchorQueue.removeRepeatableByKey(rJob.key);
+      }
+    }
+    await xionAnchorQueue.add(
+      "nightly-dpa-cleanup",
+      {},
+      {
+        repeat: {
+          pattern: "0 2 * * *", // Daily at 2am EAT
+          tz: "Africa/Nairobi"
+        },
+        jobId: "nightly-dpa-cleanup-job"
       }
     );
 
@@ -138,13 +158,13 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     await photoVerificationWorker.close();
     await atmosphericVerificationWorker.close();
     await notificationsWorker.close();
-    await midnightAnchorWorker.close();
+    await xionAnchorWorker.close();
 
     // Close queues
     await photoVerificationQueue.close();
     await atmosphericVerificationQueue.close();
     await notificationsQueue.close();
-    await midnightAnchorQueue.close();
+    await xionAnchorQueue.close();
 
     instance.log.info("BullMQ shut down successfully.");
   });

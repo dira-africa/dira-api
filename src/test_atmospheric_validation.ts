@@ -28,7 +28,7 @@ import {
   photoVerificationWorker,
   atmosphericVerificationWorker,
   notificationsWorker,
-  midnightAnchorWorker
+  xionAnchorWorker
 } from "./jobs/workers";
 
 async function runTests() {
@@ -203,7 +203,7 @@ async function runTests() {
       await photoVerificationWorker.close();
       await atmosphericVerificationWorker.close();
       await notificationsWorker.close();
-      await midnightAnchorWorker.close();
+      await xionAnchorWorker.close();
     } catch (workerErr: any) {
       console.error("Error closing workers during cleanup:", workerErr.message);
     }

@@ -27,6 +27,7 @@ import partnerRoutes from "./routes/partner";
 import webhooksRoutes from "./routes/webhooks";
 import cropSubmissionsRoutes from "./routes/cropSubmissions";
 import atmosphericRoutes from "./routes/atmospheric";
+import usersRoutes from "./routes/users";
 
 // Payments subroutes
 import airtimeRoutes from "./routes/payments/airtime";
@@ -38,34 +39,43 @@ const server = Fastify({
   logger: {
     level: env.NODE_ENV === "production" ? "info" : "debug",
   },
+  bodyLimit: 1048576, // 1MB JSON body limit
 });
 
 async function main() {
   try {
     // 1. Register Helmet for security headers
     await server.register(helmet, {
-      contentSecurityPolicy: env.NODE_ENV === "production" ? undefined : false,
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          imgSrc: ["'self'", "data:", "https://*.r2.cloudflarestorage.com"],
+        },
+      },
+      frameguard: {
+        action: "deny",
+      },
+      referrerPolicy: {
+        policy: "strict-origin-when-cross-origin",
+      },
     });
 
     // 2. Register CORS with whitelist
     await server.register(cors, {
-      origin: (origin, cb) => {
-        const whitelist = ["https://app.dira.africa", "http://localhost:3000"];
-        // Allow requests with no origin (like mobile apps, curl, postman)
-        if (!origin || whitelist.includes(origin)) {
-          cb(null, true);
-        } else {
-          cb(new Error("Not allowed by CORS"), false);
-        }
-      },
+      origin: ["https://app.diraafrica.com", "http://localhost:3000"],
+      methods: ["GET", "POST", "PATCH", "DELETE"],
+      allowedHeaders: ["Content-Type", "Authorization"],
+      credentials: true,
+      maxAge: 86400,
     });
 
     // 3. Register global rate limiter (100 req/min/IP)
     await server.register(rateLimit, {
       max: 100,
       timeWindow: "1 minute",
+      hook: "preValidation",
       errorResponseBuilder: (request, context) => {
-        const error = new Error("Rate limit exceeded. Please try again in a minute.") as any;
+        const error = new Error("Rate limit exceeded. Please try again later. / Umefikia kikomo cha maombi. Tafadhali jaribu tena baadaye.") as any;
         error.statusCode = 429;
         return error;
       },
@@ -119,12 +129,18 @@ async function main() {
     await server.register(webhooksRoutes, { prefix: "/api/webhooks" });
     await server.register(cropSubmissionsRoutes, { prefix: "/api/crop-submissions" });
     await server.register(atmosphericRoutes, { prefix: "/api/atmospheric" });
+    await server.register(usersRoutes, { prefix: "/api/users" });
 
     // Payments subroutes
     await server.register(airtimeRoutes, { prefix: "/api/payments/airtime" });
     await server.register(vouchersRoutes, { prefix: "/api/payments/vouchers" });
     await server.register(circleRoutes, { prefix: "/api/payments/circle" });
     await server.register(mpesaRoutes, { prefix: "/api/payments/mpesa" });
+
+    // security.txt route
+    server.get("/.well-known/security.txt", async (request, reply) => {
+      return reply.type("text/plain").send("Contact: security@diraafrica.com\n");
+    });
 
     // Local static file serving fallback for uploads
     server.get("/uploads/:filename", async (request, reply) => {

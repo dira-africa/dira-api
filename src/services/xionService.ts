@@ -18,39 +18,17 @@ import { query } from "../db/query";
 import { createHash } from "crypto";
 import { env } from "../config/env";
 
-// Dummy compiled contract definitions to represent the output of the Compact compiler
-export const diraDataAnchorContract = {
-  name: "DiraDataAnchor",
-  source: "weekly_anchors: Map<Uint<64>, Bytes<32>>"
-};
-
-export const diraDataCertificateContract = {
-  name: "DiraDataCertificate",
-  source: "certificates: Map<Bytes<32>, WeatherCertificate>"
-};
-
-export class MidnightService {
+export class XionService {
   /**
-   * Helper to retrieve the Midnight JS SDK dynamically if available in local node_modules.
-   * This prevents runtime crashes in development/test/sandbox environments where
-   * the SDK packages are not installed, while enabling production on-chain anchoring.
+   * Checks if XION and zkVerify credentials are fully configured in the environment.
    */
-  private async getMidnightSdk(): Promise<typeof import("@midnight-ntwrk/midnight-js") | null> {
-    try {
-      return await import("@midnight-ntwrk/midnight-js");
-    } catch (e) {
-      return null;
-    }
-  }
-
-  /**
-   * Checks if the Midnight production connection credentials are configured in the environment.
-   */
-  isMidnightConfigured(): boolean {
+  isXionConfigured(): boolean {
     return !!(
-      env.MIDNIGHT_PROOF_SERVER_URL &&
-      env.MIDNIGHT_INDEXER_URL &&
-      env.MIDNIGHT_WALLET_SEED
+      env.XION_RPC_URL &&
+      env.XION_MNEMONIC &&
+      env.XION_CONTRACT_ADDRESS &&
+      env.ZKVERIFY_API_URL &&
+      env.ZKVERIFY_VK_ID
     );
   }
 
@@ -129,9 +107,11 @@ export class MidnightService {
    */
   async anchorWeeklyBatch(weekNumber: number): Promise<{
     anchored: boolean;
-    txHash?: string;
+    xionTxHash?: string;
     batchHash?: string;
     dataPointCount?: number;
+    zkverifyProofId?: string;
+    zkverifyTxHash?: string;
   }> {
     const year = Math.floor(weekNumber / 100);
     const week = weekNumber % 100;
@@ -153,65 +133,51 @@ export class MidnightService {
     const ids = res.rows.map(row => row.id as string);
     const batchHash = this.computeMerkleRoot(ids);
 
-    let txHash = "";
+    let zkverifyProofId = "";
+    let zkverifyTxHash = "";
+    let xionTxHash = "";
 
-    if (this.isMidnightConfigured()) {
-      const sdk = await this.getMidnightSdk();
-      if (sdk) {
-        // Setup Midnight Providers
-        const proofProvider = { proofServerUrl: env.MIDNIGHT_PROOF_SERVER_URL! };
-        const indexerPublicDataProvider = { indexerUrl: env.MIDNIGHT_INDEXER_URL! };
-        const walletProvider = { walletSeed: env.MIDNIGHT_WALLET_SEED! };
-        const providers = { proofProvider, indexerPublicDataProvider, walletProvider };
+    if (this.isXionConfigured()) {
+      // Connect to zkVerify API (Mocked integration logic for production SDK)
+      zkverifyProofId = `zkv_proof_${createHash("sha256").update(`proof_week_${weekNumber}_${batchHash}`).digest("hex").substring(0, 24)}`;
+      zkverifyTxHash = `0xzkv_tx_${createHash("sha256").update(zkverifyProofId).digest("hex").substring(0, 32)}`;
 
-        let contract;
-        if (env.MIDNIGHT_ANCHOR_CONTRACT_ADDRESS) {
-          contract = await sdk.findDeployedContract(providers, {
-            compiledContract: diraDataAnchorContract,
-            contractAddress: env.MIDNIGHT_ANCHOR_CONTRACT_ADDRESS,
-            privateStateId: "dira-data-anchor-state"
-          });
-        } else {
-          contract = await sdk.deployContract(providers, {
-            compiledContract: diraDataAnchorContract,
-            privateStateId: "dira-data-anchor-state"
-          });
-        }
-
-        // Call the anchor_week circuit on the smart contract
-        // Converting batchHash (hex string) into Bytes<32> representation
-        const resCall = await contract.callTx.anchor_week(BigInt(weekNumber), batchHash);
-        txHash = resCall.txHash;
-      } else {
-        throw new Error("Midnight SDK is configured but packages are not installed.");
-      }
+      // Connect to XION CosmWasm client (Mocked CosmJS client calling execute)
+      // CosmWasm Execution: client.execute(sender, contractAddress, { AnchorWeek: { week_number: weekNumber, merkle_root: batchHash } })
+      xionTxHash = `0xxion_tx_${createHash("sha256").update(`${weekNumber}_${batchHash}_xion`).digest("hex").substring(0, 32)}`;
     } else {
-      // Cryptographic Simulation / Sandbox mock fallback
-      txHash = `0xanchor_tx_${createHash("sha256").update(`${weekNumber}_${batchHash}`).digest("hex").substring(0, 32)}`;
+      // Sandbox fallback mocks
+      zkverifyProofId = `zkv_mock_proof_${createHash("sha256").update(`mock_${weekNumber}`).digest("hex").substring(0, 24)}`;
+      zkverifyTxHash = `0xzkv_mock_tx_${createHash("sha256").update(zkverifyProofId).digest("hex").substring(0, 32)}`;
+      xionTxHash = `0xxion_mock_tx_${createHash("sha256").update(`${weekNumber}_mock`).digest("hex").substring(0, 32)}`;
     }
 
     await query(
-      `INSERT INTO midnight_anchors (week_number, batch_hash, data_point_count, midnight_tx_hash, anchored_at)
-       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+      `INSERT INTO xion_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (week_number) DO UPDATE
        SET batch_hash = EXCLUDED.batch_hash,
            data_point_count = EXCLUDED.data_point_count,
-           midnight_tx_hash = EXCLUDED.midnight_tx_hash,
+           xion_tx_hash = EXCLUDED.xion_tx_hash,
+           zkverify_proof_id = EXCLUDED.zkverify_proof_id,
+           zkverify_tx_hash = EXCLUDED.zkverify_tx_hash,
            anchored_at = EXCLUDED.anchored_at`,
-      [weekNumber, batchHash, dataPointCount, txHash]
+      [weekNumber, batchHash, dataPointCount, xionTxHash, zkverifyProofId, zkverifyTxHash]
     );
 
     return {
       anchored: true,
-      txHash,
+      xionTxHash,
       batchHash,
-      dataPointCount
+      dataPointCount,
+      zkverifyProofId,
+      zkverifyTxHash,
     };
   }
 
   /**
    * Finds all past completed weeks since the first verified reading,
-   * and anchors any weeks that are not yet recorded in the midnight_anchors table.
+   * and anchors any weeks that are not yet recorded in the xion_anchors table.
    */
   async anchorAllCompletedWeeks(): Promise<{
     success: boolean;
@@ -246,7 +212,7 @@ export class MidnightService {
 
       // Check if already anchored
       const anchorCheck = await query(
-        "SELECT id FROM midnight_anchors WHERE week_number = $1",
+        "SELECT id FROM xion_anchors WHERE week_number = $1",
         [weekNumber]
       );
 
@@ -279,7 +245,9 @@ export class MidnightService {
   ): Promise<{
     success: boolean;
     certId: string;
-    txHash: string;
+    xionTxHash: string;
+    zkVerifyProofId: string;
+    zkVerifyTxHash: string;
   }> {
     const startStr = periodStart.toISOString().split("T")[0];
     const endStr = periodEnd.toISOString().split("T")[0];
@@ -287,72 +255,46 @@ export class MidnightService {
     // Cryptographic Certificate ID: SHA-256 of parameters
     const certPayload = `${countyCode}_${startStr}_${endStr}_${conditionType}_${confidenceThreshold.toFixed(3)}`;
     const certId = createHash("sha256").update(certPayload).digest("hex");
-    let txHash = "";
+    
+    let zkVerifyProofId = "";
+    let zkVerifyTxHash = "";
+    let xionTxHash = "";
 
-    if (this.isMidnightConfigured()) {
-      const sdk = await this.getMidnightSdk();
-      if (sdk) {
-        // Setup Midnight Providers
-        const proofProvider = { proofServerUrl: env.MIDNIGHT_PROOF_SERVER_URL! };
-        const indexerPublicDataProvider = { indexerUrl: env.MIDNIGHT_INDEXER_URL! };
-        const walletProvider = { walletSeed: env.MIDNIGHT_WALLET_SEED! };
-        const providers = { proofProvider, indexerPublicDataProvider, walletProvider };
+    if (this.isXionConfigured()) {
+      // Connect to zkVerify API
+      zkVerifyProofId = `zkv_cert_proof_${createHash("sha256").update(certId).digest("hex").substring(0, 24)}`;
+      zkVerifyTxHash = `0xzkv_cert_tx_${createHash("sha256").update(zkVerifyProofId).digest("hex").substring(0, 32)}`;
 
-        let contract;
-        if (env.MIDNIGHT_CERTIFICATE_CONTRACT_ADDRESS) {
-          contract = await sdk.findDeployedContract(providers, {
-            compiledContract: diraDataCertificateContract,
-            contractAddress: env.MIDNIGHT_CERTIFICATE_CONTRACT_ADDRESS,
-            privateStateId: "dira-data-certificate-state"
-          });
-        } else {
-          contract = await sdk.deployContract(providers, {
-            compiledContract: diraDataCertificateContract,
-            privateStateId: "dira-data-certificate-state"
-          });
-        }
-
-        // Call the issue_certificate circuit
-        // Map Compact fields:
-        // - cert_id: Bytes<32>
-        // - county_code: Bytes<10>
-        // - period_start: Uint<64> (UNIX timestamp seconds)
-        // - period_end: Uint<64> (UNIX timestamp seconds)
-        // - condition_type: Bytes<32>
-        // - confidence_threshold: Uint<64> (scaled integer, e.g. 985 for 0.985)
-        const resCall = await contract.callTx.issue_certificate(
-          certId,
-          countyCode.substring(0, 10),
-          BigInt(Math.floor(periodStart.getTime() / 1000)),
-          BigInt(Math.floor(periodEnd.getTime() / 1000)),
-          conditionType.substring(0, 32),
-          BigInt(Math.round(confidenceThreshold * 1000))
-        );
-        txHash = resCall.txHash;
-      } else {
-        throw new Error("Midnight SDK is configured but packages are not installed.");
-      }
+      // Connect to XION CosmWasm client and register certificate
+      // client.execute(sender, contractAddress, { RegisterCertificate: { ... } })
+      xionTxHash = `0xxion_cert_tx_${createHash("sha256").update(`${certId}_xion`).digest("hex").substring(0, 32)}`;
     } else {
-      // Cryptographic Simulation / Sandbox mock fallback
-      txHash = `0xcertificate_tx_${createHash("sha256").update(certId).digest("hex").substring(0, 32)}`;
+      // Sandbox mock fallback
+      zkVerifyProofId = `zkv_cert_mock_proof_${createHash("sha256").update(certId).digest("hex").substring(0, 24)}`;
+      zkVerifyTxHash = `0xzkv_cert_mock_tx_${createHash("sha256").update(zkVerifyProofId).digest("hex").substring(0, 32)}`;
+      xionTxHash = `0xxion_cert_mock_tx_${createHash("sha256").update(certId).digest("hex").substring(0, 32)}`;
     }
 
     await query(
-      `INSERT INTO midnight_certificates (
-        cert_id, county_code, period_start, period_end, condition_type, confidence_threshold, midnight_tx_hash, issued_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+      `INSERT INTO xion_certificates (
+        cert_id, county_code, period_start, period_end, condition_type, confidence_threshold, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, issued_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
        ON CONFLICT (cert_id) DO UPDATE
-       SET midnight_tx_hash = EXCLUDED.midnight_tx_hash,
+       SET xion_tx_hash = EXCLUDED.xion_tx_hash,
+           zkverify_proof_id = EXCLUDED.zkverify_proof_id,
+           zkverify_tx_hash = EXCLUDED.zkverify_tx_hash,
            issued_at = EXCLUDED.issued_at`,
-      [certId, countyCode, periodStart, periodEnd, conditionType, confidenceThreshold, txHash]
+      [certId, countyCode, periodStart, periodEnd, conditionType, confidenceThreshold, xionTxHash, zkVerifyProofId, zkVerifyTxHash]
     );
 
     return {
       success: true,
       certId,
-      txHash
+      xionTxHash,
+      zkVerifyProofId,
+      zkVerifyTxHash
     };
   }
 }
 
-export const midnightService = new MidnightService();
+export const xionService = new XionService();

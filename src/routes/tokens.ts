@@ -22,6 +22,7 @@ import { voucherService } from "../services/voucherService";
 import { diraCircleService } from "../services/diraCircleService";
 import { paymentService } from "../services/paymentService";
 import { env } from "../config/env";
+import { sanitizePhone } from "../lib/sanitize";
 
 interface RedeemAirtimeRouteBody {
   token_amount: number;
@@ -158,10 +159,10 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         rateLimit: {
           max: 3,
           timeWindow: "1 hour",
+          groupId: "tokens-redeem",
           keyGenerator: (request: any) => request.user?.id || request.ip,
-        },
+        } as any,
       },
-      attachValidation: true,
       schema: {
         body: {
           type: "object",
@@ -178,35 +179,8 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const userId = request.user.id;
-      
-      // Handle schema validation errors and map to specific code/messages
-      if (request.validationError) {
-        const validation = request.validationError.validation;
-        if (validation && validation.length > 0) {
-          const firstErr = validation[0];
-          const path = firstErr.instancePath;
-          const missingProp = firstErr.params?.missingProperty;
-          
-          if (path.includes("token_amount") || missingProp === "token_amount") {
-            return reply.status(400).send({
-              success: false,
-              error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
-            });
-          }
-          if (path.includes("phone_number") || missingProp === "phone_number") {
-            return reply.status(400).send({
-              success: false,
-              error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
-            });
-          }
-        }
-        return reply.status(400).send({
-          success: false,
-          error: { code: "VALIDATION_ERROR", message: request.validationError.message }
-        });
-      }
-
       const { token_amount, phone_number } = request.body;
+      const sanitizedPhone = sanitizePhone(phone_number);
 
       // Duplicate/Fallback manual validation just to be fully secure
       if (token_amount === undefined || token_amount < 20) {
@@ -217,7 +191,7 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
       }
 
       const phoneRegex = /^(\+?254|0)[17][0-9]{8}$/;
-      if (!phone_number || !phoneRegex.test(phone_number)) {
+      if (!sanitizedPhone || !phoneRegex.test(sanitizedPhone)) {
         return reply.status(400).send({
           success: false,
           error: { code: "INVALID_PHONE_NUMBER", message: "Invalid Kenyan phone number format." }
@@ -228,7 +202,7 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         const result = await airtimeService.initiateAirtimeRedemption(
           userId,
           token_amount,
-          phone_number
+          sanitizedPhone
         );
         return result;
       } catch (err: any) {
@@ -269,6 +243,14 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
     "/redeem/voucher",
     {
       onRequest: [fastify.authenticate, fastify.requireRole(["farmer"])],
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: "1 hour",
+          groupId: "tokens-redeem",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+        } as any,
+      },
       schema: {
         body: {
           type: "object",
@@ -283,6 +265,13 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const userId = request.user.id;
       const { token_amount, agro_dealer_id } = request.body;
+
+      if (!env.VOUCHERS_ACTIVE) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "VOUCHER_NOT_YET_ACTIVE", message: "Agro-dealer vouchers are not yet active." }
+        });
+      }
 
       // Manual validations for precise error codes
       if (token_amount === undefined || token_amount < 50) {
@@ -385,7 +374,17 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
   // 7. POST /api/tokens/redeem/circle - Redeem Climate Tokens for Dira Circle Cash Pool
   fastify.post<{ Body: { token_amount?: number; tokenAmount?: number } }>(
     "/redeem/circle",
-    { onRequest: [fastify.authenticate] },
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: "1 hour",
+          groupId: "tokens-redeem",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+        } as any,
+      },
+    },
     async (request, reply) => {
       if (!env.DIRA_CIRCLE_ACTIVE) {
         return reply.status(503).send({
@@ -497,7 +496,17 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
   // 9. POST /api/tokens/redeem/mpesa - Redeem Climate Tokens for Safaricom Daraja B2C Cashout
   fastify.post<{ Body: { tokenAmount?: number; token_amount?: number; phoneNumber?: string; phone_number?: string } }>(
     "/redeem/mpesa",
-    { onRequest: [fastify.authenticate] },
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: "1 hour",
+          groupId: "tokens-redeem",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+        } as any,
+      },
+    },
     async (request, reply) => {
       if (!env.DARAJA_PRODUCTION_ACTIVE) {
         return reply.status(503).send({
