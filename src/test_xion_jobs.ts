@@ -16,6 +16,7 @@
 
 import Fastify from "fastify";
 import jwt from "@fastify/jwt";
+import fp from "fastify-plugin";
 import { env } from "./config/env";
 import databasePlugin from "./plugins/database";
 import authPlugin from "./plugins/auth";
@@ -23,6 +24,7 @@ import jobsPlugin from "./plugins/jobs";
 import adminRoutes from "./routes/admin";
 import { pool } from "./db/pool";
 import { xionService } from "./services/xionService";
+import { redis } from "./db/redis";
 
 async function runTests() {
   const server = Fastify({
@@ -31,6 +33,15 @@ async function runTests() {
 
   // Register dependencies
   await server.register(jwt, { secret: env.JWT_SECRET });
+
+  // Register separate admin JWT namespace
+  await server.register(fp(async (instance) => {
+    await instance.register(jwt, {
+      secret: process.env.ADMIN_JWT_SECRET || (env.JWT_SECRET + "_admin_hardened"),
+      namespace: "admin",
+    });
+  }));
+
   await server.register(authPlugin);
   await server.register(databasePlugin);
   await server.register(jobsPlugin);
@@ -112,7 +123,8 @@ async function runTests() {
     const agentId = agentRes.rows[0].id;
 
     // Generate JWT token for admin
-    const adminToken = server.jwt.sign({ id: adminId, role: "admin" });
+    const adminToken = server.jwt.admin.sign({ id: adminId, role: "admin" });
+    await redis.set(`dira:admin:session:${adminId}`, "active", "EX", 7200);
 
     // --- TEST 1: Merkle Root Calculation ---
     console.log("\n--- TEST 1: Merkle Root Calculation ---");
@@ -280,6 +292,7 @@ async function runTests() {
     process.exit(1);
   } finally {
     await server.close();
+    await redis.quit();
   }
 }
 
