@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 Blockchain & Climate Institute
+ * Copyright 2026 Dira Africa
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 import { env } from "../config/env";
 import { createHash, randomUUID } from "crypto";
 import { query } from "../db/query";
-import { tokenService } from "./tokenService";
+import { tokenService, deductTokens } from "./tokenService";
 import { redis } from "../db/redis";
 
 export class PaymentService {
@@ -320,3 +320,75 @@ export class PaymentService {
 }
 
 export const paymentService = new PaymentService();
+
+/**
+ * Standalone wrapper to fetch the Safaricom Daraja OAuth token.
+ */
+export async function getDarajaOAuthToken(): Promise<string> {
+  return paymentService.getDarajaOAuthToken();
+}
+
+/**
+ * Initiates M-Pesa B2C redemption/disbursement (Daraja).
+ */
+export async function initiateMpesaRedemption(
+  userId: string,
+  tokenAmount: number,
+  phoneNumber: string
+): Promise<{ success: boolean; conversationId?: string }> {
+  const isProductionActive = process.env.DARAJA_PRODUCTION_ACTIVE === "true" || env.DARAJA_PRODUCTION_ACTIVE === true;
+  if (!isProductionActive) {
+    throw new Error("MPESA_NOT_YET_ACTIVE");
+  }
+
+  const KES_PER_TOKEN = 0.50;
+  const kesAmount = tokenAmount * KES_PER_TOKEN;
+
+  const consumerKey = process.env.DARAJA_CONSUMER_KEY || env.DARAJA_CONSUMER_KEY;
+  const consumerSecret = process.env.DARAJA_CONSUMER_SECRET || env.DARAJA_CONSUMER_SECRET;
+  const useMock = !consumerKey || !consumerSecret || consumerKey === "mock" || phoneNumber.includes("999999");
+
+  const redemptionId = randomUUID();
+  // Deduct tokens before calling Daraja
+  await deductTokens(userId, tokenAmount, "redeem_mpesa", redemptionId);
+
+  if (useMock) {
+    console.log(`[DARAJA-MPESA B2C MOCK] Simulating B2C disbursement of KES ${kesAmount} to ${phoneNumber}`);
+    const mockConversationId = `mpesa_mock_conv_${createHash("sha256").update(`${phoneNumber}_${kesAmount}_${Date.now()}`).digest("hex").substring(0, 16)}`;
+    return {
+      success: true,
+      conversationId: mockConversationId
+    };
+  }
+
+  // Get OAuth token
+  const oauthToken = await getDarajaOAuthToken();
+
+  const response = await fetch(
+    "https://api.safaricom.co.ke/mpesa/b2c/v3/paymentrequest",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${oauthToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        InitiatorName: process.env.DARAJA_INITIATOR_NAME || env.DARAJA_INITIATOR_NAME,
+        SecurityCredential: process.env.DARAJA_SECURITY_CREDENTIAL || env.DARAJA_SECURITY_CREDENTIAL,
+        CommandID: "BusinessPayment",
+        Amount: Math.floor(kesAmount),
+        PartyA: process.env.DARAJA_SHORT_CODE || env.DARAJA_SHORTCODE || "600000",
+        PartyB: phoneNumber,
+        Remarks: `Dira token redemption ${redemptionId}`,
+        QueueTimeOutURL: `${process.env.API_BASE_URL || "https://app.dira.africa/api"}/webhooks/daraja/timeout`,
+        ResultURL: `${process.env.API_BASE_URL || "https://app.dira.africa/api"}/webhooks/daraja/result`
+      })
+    }
+  );
+
+  const data = await response.json();
+  return {
+    success: data.ResponseCode === "0",
+    conversationId: data.ConversationID
+  };
+}

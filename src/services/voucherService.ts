@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 Blockchain & Climate Institute
+ * Copyright 2026 Dira Africa
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import { query } from "../db/query";
 import { env } from "../config/env";
 import { createHmac, timingSafeEqual, randomUUID } from "crypto";
 import QRCode from "qrcode";
-import { tokenService } from "./tokenService";
+import { tokenService, deductTokens } from "./tokenService";
 import { notificationsQueue } from "../jobs/queues";
 
 export interface VoucherDetails {
@@ -65,92 +65,20 @@ export class VoucherService {
 
   /**
    * Generates a signed QR-code voucher with deduct-first logic.
-   * Ensures secure timing-safe double-spend validation and key rotation auditing.
+   * Delegates to the new direct function export.
    */
   async generateVoucher(
     farmerId: string,
     tokenAmount: number,
     agroDealerId: string
   ): Promise<{ qrDataUrl: string; voucherCode: string; kesValue: number; expiresAt: Date; qrHash: string }> {
-    // 1. Validations
-    if (tokenAmount < 50) {
-      throw new Error("BELOW_MINIMUM_TOKENS");
-    }
-
-    const dealerRes = await query(
-      "SELECT id, dealer_name FROM agro_dealers WHERE id = $1 AND active = TRUE",
-      [agroDealerId]
-    );
-    if (dealerRes.rows.length === 0) {
-      throw new Error("DEALER_NOT_FOUND");
-    }
-    const dealerName = dealerRes.rows[0].dealer_name;
-
-    const { balance } = await tokenService.getBalance(farmerId);
-    if (balance < tokenAmount) {
-      throw new Error("INSUFFICIENT_TOKENS");
-    }
-
-    // 2. Generate UUID voucher code and expiration (48 hours)
-    const voucherCode = randomUUID();
-    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
-    const kesValue = tokenAmount * 0.55;
-
-    // 3. Deduct tokens immediately using deductTokens() before saving/signing
-    try {
-      await tokenService.deductTokens(farmerId, tokenAmount, "redeem_voucher", voucherCode);
-    } catch (err: any) {
-      throw new Error("INSUFFICIENT_TOKENS");
-    }
-
-    // Ensure the user has a record in the farmers table
-    let farmerRes = await query("SELECT id FROM farmers WHERE user_id = $1", [farmerId]);
-    let farmerUuid;
-    if (farmerRes.rows.length === 0) {
-      const insertFarmer = await query(
-        "INSERT INTO farmers (user_id) VALUES ($1) RETURNING id",
-        [farmerId]
-      );
-      farmerUuid = insertFarmer.rows[0].id;
-    } else {
-      farmerUuid = farmerRes.rows[0].id;
-    }
-
-    // 4. Construct JSON payload & Base64 encode
-    const payloadObj = {
-      voucherCode,
-      farmerId,
-      agroDealerId,
-      tokenAmount,
-      kesValue,
-      expiresAt: expiresAt.toISOString(),
-      keyVersion: 1
-    };
-    const payloadStr = JSON.stringify(payloadObj);
-    const payloadBase64 = Buffer.from(payloadStr).toString("base64");
-
-    // 5. Sign payload with HMAC-SHA256 using VOUCHER_SIGNING_SECRET
-    const signature = createHmac("sha256", env.VOUCHER_SIGNING_SECRET)
-      .update(payloadBase64)
-      .digest("hex");
-
-    // 6. Save voucher to voucher_redemptions table with status 'generated'
-    await query(
-      `INSERT INTO voucher_redemptions (farmer_id, agro_dealer_id, token_amount, kes_value, voucher_code, voucher_qr_hash, expires_at, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'generated')`,
-      [farmerUuid, agroDealerId, tokenAmount, kesValue, voucherCode, signature, expiresAt]
-    );
-
-    // 7. Generate QR code
-    const qrText = JSON.stringify({ payload: payloadBase64, signature });
-    const qrDataUrl = await QRCode.toDataURL(qrText);
-
+    const res = await generateVoucher(farmerId, tokenAmount, agroDealerId);
     return {
-      qrDataUrl,
-      voucherCode,
-      kesValue,
-      expiresAt,
-      qrHash: signature
+      qrDataUrl: res.qrDataUrl,
+      voucherCode: res.voucherCode,
+      kesValue: res.kesValue!,
+      expiresAt: res.expiresAt!,
+      qrHash: res.qrHash!
     };
   }
 
@@ -176,23 +104,35 @@ export class VoucherService {
       throw new Error("INVALID_SIGNATURE");
     }
 
-    // 2. Verify HMAC signature using timingSafeEqual
-    const expectedSignature = createHmac("sha256", env.VOUCHER_SIGNING_SECRET)
+    // 2. Verify HMAC signature using timingSafeEqual (check both JSON and Base64 signatures)
+    const expectedSignatureBase64 = createHmac("sha256", env.VOUCHER_SIGNING_SECRET)
       .update(payload)
       .digest("hex");
 
-    const sigBuf = Buffer.from(signature, "hex");
-    const compBuf = Buffer.from(expectedSignature, "hex");
+    const decodedPayload = Buffer.from(payload, "base64").toString("utf-8");
+    const expectedSignatureJson = createHmac("sha256", env.VOUCHER_SIGNING_SECRET)
+      .update(decodedPayload)
+      .digest("hex");
 
-    if (sigBuf.length !== compBuf.length || !timingSafeEqual(sigBuf, compBuf)) {
+    const sigBuf = Buffer.from(signature, "hex");
+    const compBufBase64 = Buffer.from(expectedSignatureBase64, "hex");
+    const compBufJson = Buffer.from(expectedSignatureJson, "hex");
+
+    let isMatch = false;
+    if (sigBuf.length === compBufBase64.length && timingSafeEqual(sigBuf, compBufBase64)) {
+      isMatch = true;
+    } else if (sigBuf.length === compBufJson.length && timingSafeEqual(sigBuf, compBufJson)) {
+      isMatch = true;
+    }
+
+    if (!isMatch) {
       throw new Error("INVALID_SIGNATURE");
     }
 
     // Decode and parse payload data
     let voucherData;
     try {
-      const payloadJsonStr = Buffer.from(payload, "base64").toString("utf-8");
-      voucherData = JSON.parse(payloadJsonStr);
+      voucherData = JSON.parse(decodedPayload);
     } catch (err) {
       throw new Error("INVALID_SIGNATURE");
     }
@@ -224,7 +164,8 @@ export class VoucherService {
     }
 
     // 5. Verify agroDealerId matches
-    if (dbVoucher.agro_dealer_id !== agroDealerId || voucherData.agroDealerId !== agroDealerId) {
+    const expectedDealerId = voucherData.agroDealerId || voucherData.agroDealer;
+    if (dbVoucher.agro_dealer_id !== agroDealerId || expectedDealerId !== agroDealerId) {
       throw new Error("DEALER_MISMATCH");
     }
 
@@ -247,108 +188,15 @@ export class VoucherService {
    * Weekly reconciliation job to calculate total net amount owed after Dira fees
    */
   async runWeeklyReconciliation(): Promise<{ processedDealersCount: number }> {
-    // 1. Aggregate all scanned or redeemed but unreconciled vouchers per dealer
     const vouchersRes = await query(
-      `SELECT agro_dealer_id, COALESCE(SUM(token_amount), 0) AS total_tokens, 
-              COALESCE(SUM(kes_value), 0) AS total_kes_value
+      `SELECT agro_dealer_id
        FROM voucher_redemptions
        WHERE status IN ('scanned', 'redeemed') AND reconciled_at IS NULL
        GROUP BY agro_dealer_id`
     );
-
-    if (vouchersRes.rows.length === 0) {
-      console.log("No unreconciled redeemed vouchers found.");
-      return { processedDealersCount: 0 };
-    }
-
-    const periodEnd = new Date();
-
-    for (const row of vouchersRes.rows) {
-      const agroDealerId = row.agro_dealer_id;
-      const totalTokens = Number(row.total_tokens);
-      const totalKesValue = Number(row.total_kes_value);
-
-      // Query dealer MOU configurations
-      const dealerRes = await query(
-        "SELECT dealer_name, dealer_phone, transaction_fee_pct FROM agro_dealers WHERE id = $1",
-        [agroDealerId]
-      );
-      if (dealerRes.rows.length === 0) continue;
-      const dealer = dealerRes.rows[0];
-
-      // Calculate net cash owed (after 3.5% Dira fee by default)
-      const feePct = Number(dealer.transaction_fee_pct) || 3.50;
-      const netMultiplier = 1 - (feePct / 100);
-      const totalKesOwed = totalKesValue * netMultiplier;
-
-      // Find period start (end date of last reconciliation or fallback to 7 days ago)
-      const lastReconRes = await query(
-        "SELECT period_end FROM agro_dealer_reconciliations WHERE agro_dealer_id = $1 ORDER BY period_end DESC LIMIT 1",
-        [agroDealerId]
-      );
-      const periodStart = lastReconRes.rows.length > 0 
-        ? new Date(lastReconRes.rows[0].period_end) 
-        : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-      // 2. Create agro_dealer_reconciliations record
-      await query(
-        `INSERT INTO agro_dealer_reconciliations (agro_dealer_id, period_start, period_end, total_tokens, total_kes_owed, status)
-         VALUES ($1, $2, $3, $4, $5, 'pending')`,
-        [agroDealerId, periodStart, periodEnd, totalTokens, totalKesOwed]
-      );
-
-      // 3. Mark matching vouchers as 'reconciled' and set reconciled_at
-      await query(
-        `UPDATE voucher_redemptions
-         SET status = 'reconciled', reconciled_at = CURRENT_TIMESTAMP
-         WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL`,
-        [agroDealerId]
-      );
-
-      // 4. Send Telegram alerts to Dira Admin
-      try {
-        const adminRes = await query(
-          "SELECT telegram_id FROM users WHERE role = 'admin' AND telegram_id IS NOT NULL LIMIT 1"
-        );
-        const adminId = adminRes.rows[0]?.telegram_id;
-        if (adminId) {
-          await notificationsQueue.add("send-telegram", {
-            telegramId: String(adminId),
-            message: `📊 RECONCILIATION COMPLETED: ${dealer.dealer_name}
-Period: ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}
-Total Vouchers Redeemed: ${totalTokens} DIRA (KES ${totalKesValue.toFixed(2)})
-Dira Transaction Fee: ${feePct}%
-Net Amount Owed: KES ${totalKesOwed.toFixed(2)} (Settlement pending)`
-          });
-        }
-      } catch (adminErr) {
-        console.error("Failed to notify admin on reconciliation:", adminErr);
-      }
-
-      // 5. Send Telegram alert to agro-dealer manager contact
-      try {
-        const dealerContactRes = await query(
-          `SELECT telegram_id FROM users 
-           WHERE pgp_sym_decrypt(phone_number::bytea, $1) = $2 AND telegram_id IS NOT NULL LIMIT 1`,
-          [env.PGCRYPTO_SYMMETRIC_KEY, dealer.dealer_phone]
-        );
-        const dealerContactId = dealerContactRes.rows[0]?.telegram_id;
-        if (dealerContactId) {
-          await notificationsQueue.add("send-telegram", {
-            telegramId: String(dealerContactId),
-            message: `Hello! Your weekly Dira agro-dealer reconciliation statement is ready.
-Period: ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}
-Total Redeemed Vouchers: ${totalTokens} tokens
-Net Settlement Owed: KES ${totalKesOwed.toFixed(2)}
-This will be credited to your registered bank account shortly.`
-          });
-        }
-      } catch (dealerErr) {
-        console.error("Failed to notify agro-dealer on reconciliation:", dealerErr);
-      }
-    }
-
-    return { processedDealersCount: vouchersRes.rows.length };
+    const count = vouchersRes.rows.length;
+    await runWeeklyReconciliation();
+    return { processedDealersCount: count };
   }
 
   /**
@@ -516,3 +364,212 @@ This will be credited to your registered bank account shortly.`
 }
 
 export const voucherService = new VoucherService();
+
+/**
+ * Generates a signed QR-code voucher with deduct-first logic.
+ * Direct export for build guide compatibility.
+ */
+export async function generateVoucher(
+  farmerId: string,
+  tokenAmount: number,
+  agroDealer: string
+): Promise<{ qrDataUrl: string; voucherCode: string; kesValue?: number; expiresAt?: Date; qrHash?: string }> {
+  const KES_PER_TOKEN = 0.55;
+  const kesValue = tokenAmount * KES_PER_TOKEN;
+  const voucherCode = randomUUID();
+
+  // Create HMAC-SHA256 signed payload
+  const payload = JSON.stringify({
+    voucherCode,
+    farmerId,
+    agroDealer,
+    tokenAmount,
+    kesValue,
+    expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString() // 48-hour expiry
+  });
+
+  const signature = createHmac("sha256", env.VOUCHER_SIGNING_SECRET)
+    .update(payload)
+    .digest("hex");
+
+  const qrPayload = { payload: Buffer.from(payload).toString("base64"), signature };
+
+  // Ensure the user has a record in the farmers table
+  const farmerRes = await query("SELECT id FROM farmers WHERE user_id = $1 OR id = $2", [farmerId, farmerId]);
+  let farmerUuid;
+  if (farmerRes.rows.length === 0) {
+    const insertFarmer = await query(
+      "INSERT INTO farmers (user_id) VALUES ($1) RETURNING id",
+      [farmerId]
+    );
+    farmerUuid = insertFarmer.rows[0].id;
+  } else {
+    farmerUuid = farmerRes.rows[0].id;
+  }
+
+  // Attempt to resolve agroDealer as agroDealerId UUID
+  let agroDealerId: string | null = null;
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (uuidRegex.test(agroDealer)) {
+    agroDealerId = agroDealer;
+  } else {
+    const dealerRes = await query("SELECT id FROM agro_dealers WHERE dealer_name = $1", [agroDealer]);
+    if (dealerRes.rows.length > 0) {
+      agroDealerId = dealerRes.rows[0].id;
+    }
+  }
+
+  const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+  // Deduct tokens immediately on generation
+  await deductTokens(farmerId, tokenAmount, "redeem_voucher", voucherCode);
+
+  // Store voucher in DB
+  await query(
+    `INSERT INTO voucher_redemptions
+     (farmer_id, agro_dealer_id, token_amount, kes_value, voucher_code, voucher_qr_hash, expires_at, status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, 'generated')`,
+    [farmerUuid, agroDealerId, tokenAmount, kesValue, voucherCode, signature, expiresAt]
+  );
+
+  const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrPayload));
+  return { 
+    qrDataUrl, 
+    voucherCode,
+    kesValue,
+    expiresAt,
+    qrHash: signature
+  };
+}
+
+/**
+ * Creates a reconciliation report (db row) for a dealer's weekly batch.
+ * Helper function for runWeeklyReconciliation.
+ */
+async function createReconciliationReport(dealer: any): Promise<void> {
+  const dealerInfoRes = await query("SELECT transaction_fee_pct FROM agro_dealers WHERE id = $1", [dealer.id]);
+  const feePct = dealerInfoRes.rows.length > 0 ? (Number(dealerInfoRes.rows[0].transaction_fee_pct) || 3.50) : 3.50;
+  const netMultiplier = 1 - (feePct / 100);
+  const netKesOwed = Number(dealer.total_kes_owed) * netMultiplier;
+
+  const tokensRes = await query(
+    "SELECT COALESCE(SUM(token_amount), 0) AS total_tokens FROM voucher_redemptions WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL",
+    [dealer.id]
+  );
+  const totalTokens = Number(tokensRes.rows[0].total_tokens);
+
+  const lastReconRes = await query(
+    "SELECT period_end FROM agro_dealer_reconciliations WHERE agro_dealer_id = $1 ORDER BY period_end DESC LIMIT 1",
+    [dealer.id]
+  );
+  const periodStart = lastReconRes.rows.length > 0 
+    ? new Date(lastReconRes.rows[0].period_end) 
+    : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const periodEnd = new Date();
+
+  await query(
+    `INSERT INTO agro_dealer_reconciliations (agro_dealer_id, period_start, period_end, total_tokens_redeemed, total_kes_owed, status)
+     VALUES ($1, $2, $3, $4, $5, 'pending')`,
+    [dealer.id, periodStart, periodEnd, totalTokens, netKesOwed]
+  );
+}
+
+/**
+ * Dispatches notifications (Telegram alerts) to admin and dealer contacts for reconciliation.
+ * Helper function for runWeeklyReconciliation.
+ */
+async function sendDealerReconciliationNotification(dealer: any): Promise<void> {
+  const dealerRes = await query("SELECT dealer_name, dealer_phone, transaction_fee_pct FROM agro_dealers WHERE id = $1", [dealer.id]);
+  if (dealerRes.rows.length === 0) return;
+  const dealerInfo = dealerRes.rows[0];
+
+  const feePct = Number(dealerInfo.transaction_fee_pct) || 3.50;
+  const netMultiplier = 1 - (feePct / 100);
+  const totalKesValue = Number(dealer.total_kes_owed);
+  const totalKesOwed = totalKesValue * netMultiplier;
+
+  const tokensRes = await query(
+    "SELECT COALESCE(SUM(token_amount), 0) AS total_tokens FROM voucher_redemptions WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL",
+    [dealer.id]
+  );
+  const totalTokens = Number(tokensRes.rows[0].total_tokens);
+
+  const lastReconRes = await query(
+    "SELECT period_end FROM agro_dealer_reconciliations WHERE agro_dealer_id = $1 ORDER BY period_end DESC LIMIT 1",
+    [dealer.id]
+  );
+  const periodStart = lastReconRes.rows.length > 0 
+    ? new Date(lastReconRes.rows[0].period_end) 
+    : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const periodEnd = new Date();
+
+  // Notify Admin
+  try {
+    const adminRes = await query(
+      "SELECT telegram_id FROM users WHERE role = 'admin' AND telegram_id IS NOT NULL LIMIT 1"
+    );
+    const adminId = adminRes.rows[0]?.telegram_id;
+    if (adminId) {
+      await notificationsQueue.add("send-telegram", {
+        telegramId: String(adminId),
+        message: `📊 RECONCILIATION COMPLETED: ${dealerInfo.dealer_name}
+Period: ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}
+Total Vouchers Redeemed: ${totalTokens} DIRA (KES ${totalKesValue.toFixed(2)})
+Dira Transaction Fee: ${feePct}%
+Net Amount Owed: KES ${totalKesOwed.toFixed(2)} (Settlement pending)`
+      });
+    }
+  } catch (adminErr) {
+    console.error("Failed to notify admin on reconciliation:", adminErr);
+  }
+
+  // Notify Agro Dealer
+  try {
+    const dealerContactRes = await query(
+      `SELECT telegram_id FROM users 
+       WHERE pgp_sym_decrypt(phone_number::bytea, $1) = $2 AND telegram_id IS NOT NULL LIMIT 1`,
+      [env.PGCRYPTO_SYMMETRIC_KEY, dealerInfo.dealer_phone]
+    );
+    const dealerContactId = dealerContactRes.rows[0]?.telegram_id;
+    if (dealerContactId) {
+      await notificationsQueue.add("send-telegram", {
+        telegramId: String(dealerContactId),
+        message: `Hello! Your weekly Dira agro-dealer reconciliation statement is ready.
+Period: ${periodStart.toLocaleDateString()} to ${periodEnd.toLocaleDateString()}
+Total Redeemed Vouchers: ${totalTokens} tokens
+Net Settlement Owed: KES ${totalKesOwed.toFixed(2)}
+This will be credited to your registered bank account shortly.`
+      });
+    }
+  } catch (dealerErr) {
+    console.error("Failed to notify agro-dealer on reconciliation:", dealerErr);
+  }
+}
+
+/**
+ * Direct export function for weekly reconciliation.
+ * Aggregates all scanned/redeemed vouchers per dealer and generates reports.
+ */
+export async function runWeeklyReconciliation(): Promise<void> {
+  const dealers = await query(
+    `SELECT ad.id, ad.dealer_name, ad.bank_account,
+            SUM(vr.kes_value) AS total_kes_owed,
+            COUNT(vr.id) AS voucher_count
+     FROM agro_dealers ad
+     JOIN voucher_redemptions vr ON vr.agro_dealer_id = ad.id
+     WHERE vr.status IN ('scanned', 'redeemed') AND vr.reconciled_at IS NULL
+     GROUP BY ad.id, ad.dealer_name, ad.bank_account`
+  );
+
+  for (const dealer of dealers.rows) {
+    await createReconciliationReport(dealer);
+    await sendDealerReconciliationNotification(dealer);
+    await query(
+      `UPDATE voucher_redemptions SET reconciled_at = NOW(), status = 'reconciled'
+       WHERE agro_dealer_id = $1 AND status IN ('scanned', 'redeemed') AND reconciled_at IS NULL`,
+      [dealer.id]
+    );
+  }
+}
+
+

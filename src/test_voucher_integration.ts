@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 Blockchain & Climate Institute
+ * Copyright 2026 Dira Africa
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,6 +63,13 @@ async function runVoucherTests() {
     );
     const farmerId = farmerRes.rows[0].id;
 
+    // Seed farmers table record
+    const fRes = await pool.query(
+      `INSERT INTO farmers (user_id) VALUES ($1) RETURNING id`,
+      [farmerId]
+    );
+    const farmerUuid = fRes.rows[0].id;
+
     // Seed token balance for the farmer (600 DIRA)
     await tokenService.awardTokens(farmerId, 600, "Initial Seeding", "bonus");
 
@@ -75,11 +82,19 @@ async function runVoucherTests() {
     );
     const partnerId = partnerRes.rows[0].id;
 
+    // Resolve county name 'Nairobi' to county UUID
+    const countyRes = await pool.query(
+      "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+      ["Nairobi"]
+    );
+    const countyUuid = countyRes.rows[0].id;
+
     // Seed Agro Dealer
     const dealerRes = await pool.query(
       `INSERT INTO agro_dealers (dealer_name, dealer_phone, county_id, bank_account, mou_signed_at, active)
-       VALUES ('Integration Agro Supplies', '+254799999999', 'Nairobi', '1122334455', CURRENT_TIMESTAMP, TRUE)
-       RETURNING id`
+       VALUES ('Integration Agro Supplies', '+254799999999', $1, '1122334455', CURRENT_TIMESTAMP, TRUE)
+       RETURNING id`,
+      [countyUuid]
     );
     const dealerId = dealerRes.rows[0].id;
 
@@ -209,7 +224,7 @@ async function runVoucherTests() {
     await pool.query(
       `INSERT INTO voucher_redemptions (farmer_id, agro_dealer_id, token_amount, kes_value, voucher_code, voucher_qr_hash, expires_at, status)
        VALUES ($1, $2, 100, 55, $3, 'expired-hash', $4, 'generated')`,
-      [farmerId, dealerId, expiredVchCode, expiredTime]
+      [farmerUuid, dealerId, expiredVchCode, expiredTime]
     );
 
     const expiredPayloadObj = {

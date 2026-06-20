@@ -8,7 +8,8 @@ CREATE TABLE agro_dealers (
   bank_account VARCHAR(50),
   active BOOLEAN DEFAULT TRUE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  dealer_logo_url TEXT
+  dealer_logo_url TEXT,
+  transaction_fee_pct DECIMAL(5, 2) DEFAULT 3.50
 );
 
 -- Create dealer_mou_records table

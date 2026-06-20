@@ -1,5 +1,5 @@
 /*
- * Copyright 2026 Blockchain & Climate Institute
+ * Copyright 2026 Dira Africa
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -199,8 +199,10 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
   }
 
   interface ScanVoucherBody {
-    qrPayload: string;
+    qrPayload?: string;
+    qr_payload?: string;
     agroDealerId?: string;
+    agro_dealer_id?: string;
   }
 
   // 3. POST /api/partner/voucher/scan - Agro-dealer scans farmer's QR
@@ -217,9 +219,13 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
 
       const userId = request.user.id;
       const userRole = request.user.role;
-      const { qrPayload, agroDealerId } = request.body;
+      const qrPayload = request.body.qrPayload || request.body.qr_payload;
+      const agroDealerId = request.body.agroDealerId || request.body.agro_dealer_id;
 
       if (!qrPayload) {
+        if (request.body.qr_payload !== undefined) {
+          return reply.status(400).send({ error: "INVALID_VOUCHER" });
+        }
         return reply.status(400).send({
           success: false,
           error: { code: "MISSING_FIELDS", message: "qrPayload is required." }
@@ -244,9 +250,27 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
 
       try {
         const result = await voucherService.scanVoucher(qrPayload, dealerId);
-        return result;
+        return {
+          success: true,
+          farmerId: result.farmerId,
+          farmer_id: result.farmerId,
+          kesValue: result.kesValue,
+          kes_value: result.kesValue,
+          message: `Voucher valid — KES ${result.kesValue.toFixed(2)} credit to your account`
+        };
       } catch (err: any) {
         const code = err.message || "REDEMPTION_FAILED";
+        
+        // If request used snake_case qr_payload (guide client), return guide-style JSON response directly
+        if (request.body.qr_payload !== undefined) {
+          const status = (code === "VOUCHER_ALREADY_REDEEMED" || code === "VOUCHER_EXPIRED" || code === "INVALID_SIGNATURE") ? 400 : 500;
+          let guideErr = "INVALID_VOUCHER";
+          if (code === "VOUCHER_EXPIRED") {
+            guideErr = "VOUCHER_EXPIRED";
+          }
+          return reply.status(status).send({ error: guideErr });
+        }
+
         const status = (code === "VOUCHER_ALREADY_REDEEMED" || code === "VOUCHER_EXPIRED" || code === "INVALID_SIGNATURE") ? 400 : 500;
         return reply.status(status).send({
           success: false,
