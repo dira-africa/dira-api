@@ -51,6 +51,7 @@ const envSchema = z.object({
   XION_CONTRACT_ADDRESS: z.string().optional(),
   ZKVERIFY_API_URL: z.string().optional(),
   ZKVERIFY_VK_ID: z.string().optional(),
+  ZKVERIFY_SEED_PHRASE: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
