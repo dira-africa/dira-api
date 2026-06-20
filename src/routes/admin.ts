@@ -81,7 +81,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       try {
         const farmersRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'farmer'");
         const agentsRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent'");
-        const anchorsRes = await query("SELECT COUNT(*) AS count FROM xion_anchors");
+        const anchorsRes = await query("SELECT COUNT(*) AS count FROM zkverify_anchors");
         
         return {
           success: true,
@@ -140,11 +140,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
         if (result.success && result.certId) {
           // Retrieve UUID of generated certificate
-          const certQuery = await query("SELECT id FROM xion_certificates WHERE cert_id = $1", [result.certId]);
+          const certQuery = await query("SELECT id FROM zkverify_certificates WHERE cert_id = $1", [result.certId]);
           if (certQuery.rows.length > 0) {
             request.adminEntityId = certQuery.rows[0].id;
           }
-          request.adminEntityType = "xion_certificates";
+          request.adminEntityType = "zkverify_certificates";
         }
 
         return result;
@@ -163,8 +163,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       request.adminAction = "view_xion_status";
       try {
-        const anchorsRes = await query("SELECT * FROM xion_anchors ORDER BY week_number DESC LIMIT 50");
-        const certificatesRes = await query("SELECT * FROM xion_certificates ORDER BY created_at DESC LIMIT 50");
+        const anchorsRes = await query("SELECT * FROM zkverify_anchors ORDER BY week_number DESC LIMIT 50");
+        const certificatesRes = await query("SELECT * FROM zkverify_certificates ORDER BY created_at DESC LIMIT 50");
 
         return {
           success: true,

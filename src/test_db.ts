@@ -38,8 +38,8 @@ async function runTests() {
       DROP TABLE IF EXISTS agro_dealer_reconciliations CASCADE;
       DROP TABLE IF EXISTS voucher_redemptions CASCADE;
       DROP TABLE IF EXISTS agro_dealers CASCADE;
-      DROP TABLE IF EXISTS xion_certificates CASCADE;
-      DROP TABLE IF EXISTS xion_anchors CASCADE;
+      DROP TABLE IF EXISTS zkverify_certificates CASCADE;
+      DROP TABLE IF EXISTS zkverify_anchors CASCADE;
       DROP TABLE IF EXISTS midnight_certificates CASCADE;
       DROP TABLE IF EXISTS midnight_anchors CASCADE;
       DROP TABLE IF EXISTS redemption_requests CASCADE;

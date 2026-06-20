@@ -153,11 +153,11 @@ The database uses sequential migration files:
 
 | Range | Tables / Features |
 |---|---|
-| 001–010 | Core platform: extensions, users, farms, agent_profiles, atmospheric_readings, crop_submissions, token_ledger, api_clients, audit_log, redemption_requests |
-| 011–012 | Midnight blockchain anchors (legacy tables) |
-| 013–015 | Circular economy: agro_dealers, voucher_redemptions, agro_dealer_reconciliations, circle_coordinators, dira_circle_distributions, dealer_product_categories |
-| 016–019 | Consent tracking, verification status, admin authentication, review fields, and M-Pesa settings |
-| 020 | XION & zkVerify blockchain anchoring (xion_anchors, xion_certificates) |
+| 001–003 | Core platform authentication, role management (`users`, `user_roles`, `sessions`), Farmers (`farmers`, `farmer_profiles`, `crop_types`), and Data Agents (`data_agents`, `agent_certifications`) |
+| 004–006 | Cooperatives & counties (`counties`, `cooperatives`), atmospheric consensus (`atmospheric_readings`, `atmospheric_triangulations`), crop photos and AI verification (`crop_photos`, `ai_analysis_results`) |
+| 007–010 | Climate token ledger (`token_ledger`, `token_transfers`), redemptions & M-Pesa config (`payment_requests`, `redemption_requests`, `mpesa_activation_settings`), API clients, and audit logs |
+| 011–012 | zkVerify anchoring layer (`zkverify_anchors`, `batch_contents`, `zkverify_certificates`) |
+| 013–015 | Circular economy integrations (`voucher_redemptions`, `agro_dealer_reconciliations`, `circle_coordinators`, `dira_circle_distributions`, `county_cash_pools`, `agro_dealers`) |
 
 All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table has a database-level `CHECK (balance_after >= 0)` constraint — negative balances cannot exist even if application code has a bug.
 

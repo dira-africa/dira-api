@@ -92,7 +92,7 @@ async function runMigrations() {
 
         if (!postgisAvailable) {
           // If PostGIS is mocked, remove the PostGIS extension load line
-          if (file === "001_extensions.sql") {
+          if (file === "001_users.sql") {
             sqlContent = sqlContent.replace('CREATE EXTENSION IF NOT EXISTS "postgis";', '-- PostGIS mocked');
           }
           // Remove type modifiers from geometry column definitions: e.g. GEOMETRY(Point, 4326) -> geometry

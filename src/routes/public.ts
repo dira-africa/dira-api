@@ -319,7 +319,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
       const anchors = await getCachedOrRun("dira:public:xion-anchors", 300, async () => {
         const res = await query(
           `SELECT week_number, batch_hash, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at 
-           FROM xion_anchors 
+           FROM zkverify_anchors 
            ORDER BY week_number DESC LIMIT 5`
         );
 

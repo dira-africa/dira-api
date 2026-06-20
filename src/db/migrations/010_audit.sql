@@ -14,3 +14,12 @@ CREATE TABLE audit_log (
 -- Index for searching log history
 CREATE INDEX idx_audit_log_user_action ON audit_log (user_id, action);
 CREATE INDEX idx_audit_log_entity ON audit_log (entity_type, entity_id);
+
+-- Create system_events table
+CREATE TABLE system_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  event_name VARCHAR(100) NOT NULL,
+  severity VARCHAR(20) NOT NULL, -- e.g. 'info', 'warning', 'error'
+  payload JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

@@ -153,7 +153,7 @@ export class XionService {
     }
 
     await query(
-      `INSERT INTO xion_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
+      `INSERT INTO zkverify_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (week_number) DO UPDATE
        SET batch_hash = EXCLUDED.batch_hash,
@@ -212,7 +212,7 @@ export class XionService {
 
       // Check if already anchored
       const anchorCheck = await query(
-        "SELECT id FROM xion_anchors WHERE week_number = $1",
+        "SELECT id FROM zkverify_anchors WHERE week_number = $1",
         [weekNumber]
       );
 
@@ -276,7 +276,7 @@ export class XionService {
     }
 
     await query(
-      `INSERT INTO xion_certificates (
+      `INSERT INTO zkverify_certificates (
         cert_id, county_code, period_start, period_end, condition_type, confidence_threshold, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, issued_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
        ON CONFLICT (cert_id) DO UPDATE

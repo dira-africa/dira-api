@@ -98,8 +98,8 @@ async function runTests() {
     }
 
     console.log("Cleaning up previous test data...");
-    await pool.query("DELETE FROM xion_certificates");
-    await pool.query("DELETE FROM xion_anchors");
+    await pool.query("DELETE FROM zkverify_certificates");
+    await pool.query("DELETE FROM zkverify_anchors");
     await pool.query("DELETE FROM atmospheric_readings");
     await pool.query("DELETE FROM users WHERE telegram_id IN (99887766, 99887767)");
 
@@ -166,7 +166,7 @@ async function runTests() {
     }
 
     const dbAnchorRes = await pool.query(
-      "SELECT * FROM xion_anchors WHERE week_number = 202620"
+      "SELECT * FROM zkverify_anchors WHERE week_number = 202620"
     );
     if (dbAnchorRes.rows.length === 0) {
       throw new Error("Weekly anchor not saved in database.");
@@ -195,7 +195,7 @@ async function runTests() {
     }
 
     const dbAnchorCheck21 = await pool.query(
-      "SELECT * FROM xion_anchors WHERE week_number = 202621"
+      "SELECT * FROM zkverify_anchors WHERE week_number = 202621"
     );
     if (dbAnchorCheck21.rows.length === 0) {
       throw new Error("Weekly catch-up anchor for week 202621 was not saved.");
@@ -210,7 +210,7 @@ async function runTests() {
     console.log("Certificate result:", certRes);
 
     const dbCertRes = await pool.query(
-      "SELECT * FROM xion_certificates WHERE cert_id = $1",
+      "SELECT * FROM zkverify_certificates WHERE cert_id = $1",
       [certRes.certId]
     );
     if (dbCertRes.rows.length === 0) {

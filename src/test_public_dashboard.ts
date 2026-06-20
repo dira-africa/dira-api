@@ -84,7 +84,7 @@ async function runTests() {
 
     console.log("Cleaning up previous test data...");
     await pool.query("DELETE FROM redemption_requests");
-    await pool.query("DELETE FROM xion_anchors");
+    await pool.query("DELETE FROM zkverify_anchors");
     await pool.query("DELETE FROM crop_submissions");
     await pool.query("DELETE FROM farms");
     await pool.query("DELETE FROM atmospheric_readings");
@@ -162,7 +162,7 @@ async function runTests() {
 
     // Seed XION anchors
     await pool.query(
-      `INSERT INTO xion_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
+      `INSERT INTO zkverify_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
        VALUES (202622, 'b67549b28ee4f25b417c237a2a67d98cce6316cba2ead4ee15391dce704ff714', 5, '0xanchor_tx_b98de253310ea19517c336eda6dd40d0', 'zkv_p_1', 'zkv_tx_1', CURRENT_TIMESTAMP)`
     );
 
