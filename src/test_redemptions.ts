@@ -69,6 +69,12 @@ async function runTests() {
     );
     const farmerId = farmerRes.rows[0].id;
 
+    // Seed farmers table record
+    await pool.query(
+      `INSERT INTO farmers (user_id) VALUES ($1)`,
+      [farmerId]
+    );
+
     // Partner user (mapped by matching phone number for dealer lookup)
     const partnerRes = await pool.query(
       `INSERT INTO users (telegram_id, telegram_username, phone_number, full_name, role, language, county)
@@ -148,11 +154,19 @@ async function runTests() {
     // --- TEST 2: Month 1 Farm Input Vouchers Flow ---
     console.log("\n--- TEST 2: Month 1 Farm Input Vouchers Flow ---");
     
+    // Resolve county name 'Nairobi' to county UUID
+    const countyRes = await pool.query(
+      "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+      ["Nairobi"]
+    );
+    const countyUuid = countyRes.rows[0].id;
+
     // Seed agro dealer
     const dealerRes = await pool.query(
       `INSERT INTO agro_dealers (dealer_name, dealer_phone, county_id, bank_account, mou_signed_at)
-       VALUES ('Nairobi Farm Supplies', '+254733333333', 'Nairobi', '998877665544', CURRENT_TIMESTAMP)
-       RETURNING id`
+       VALUES ('Nairobi Farm Supplies', '+254733333333', $1, '998877665544', CURRENT_TIMESTAMP)
+       RETURNING id`,
+      [countyUuid]
     );
     const dealerId = dealerRes.rows[0].id;
 
@@ -222,12 +236,19 @@ async function runTests() {
     // --- TEST 3: Month 2 Dira Circle Cash Pools ---
     console.log("\n--- TEST 3: Month 2 Dira Circle Cash Pools ---");
     
+    // Ensure agent has a data_agents record
+    const dataAgentRes = await pool.query(
+      `INSERT INTO data_agents (user_id) VALUES ($1) ON CONFLICT (user_id) DO UPDATE SET user_id = EXCLUDED.user_id RETURNING id`,
+      [coordinatorUserId]
+    );
+    const dataAgentId = dataAgentRes.rows[0].id;
+
     // Seed active circle coordinator
     const coordRes = await pool.query(
       `INSERT INTO circle_coordinators (agent_id, county_id, mpesa_number, active_from)
-       VALUES ($1, 'Nairobi', pgp_sym_encrypt('+254744444444', $2), CURRENT_DATE)
+       VALUES ($1, $2, '+254744444444', CURRENT_DATE)
        RETURNING id`,
-      [coordinatorUserId, encryptionKey]
+      [dataAgentId, countyUuid]
     );
 
     // Contribute 60 tokens to Nairobi county Circle pool
@@ -254,12 +275,14 @@ async function runTests() {
 
     // Check distribution summary update
     const distRes = await pool.query(
-      "SELECT * FROM dira_circle_distributions WHERE county_id = 'Nairobi'"
+      `SELECT d.* FROM dira_circle_distributions d
+       JOIN counties ct ON d.county_id = ct.id
+       WHERE ct.name = 'Nairobi'`
     );
     console.log("Circle distribution record:", distRes.rows[0]);
     if (
       distRes.rows.length === 0 || 
-      Number(distRes.rows[0].total_tokens) !== 60 || 
+      Number(distRes.rows[0].total_tokens_redeemed) !== 60 || 
       Number(distRes.rows[0].total_kes_disbursed) !== 72.00
     ) {
       throw new Error("Circle distribution record aggregates were not updated correctly.");

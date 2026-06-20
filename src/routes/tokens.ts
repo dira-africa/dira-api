@@ -446,18 +446,23 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
 
         let coordinator = null;
         if (county) {
-          const coordRes = await query(
-            `SELECT u.full_name AS name, pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS phone
-             FROM circle_coordinators cc
-             JOIN users u ON cc.agent_id = u.id
-             WHERE cc.county_id = $2 AND cc.active = TRUE`,
-            [env.PGCRYPTO_SYMMETRIC_KEY, county]
-          );
-          if (coordRes.rows.length > 0) {
-            coordinator = {
-              name: coordRes.rows[0].name,
-              mpesaNumber: coordRes.rows[0].phone
-            };
+          const countyRes = await query("SELECT id FROM counties WHERE name = $1", [county]);
+          const countyUuid = countyRes.rows[0]?.id;
+          if (countyUuid) {
+            const coordRes = await query(
+              `SELECT u.full_name AS name, cc.mpesa_number AS phone
+               FROM circle_coordinators cc
+               JOIN data_agents da ON cc.agent_id = da.id
+               JOIN users u ON da.user_id = u.id
+               WHERE cc.county_id = $1 AND cc.active = TRUE`,
+              [countyUuid]
+            );
+            if (coordRes.rows.length > 0) {
+              coordinator = {
+                name: coordRes.rows[0].name,
+                mpesaNumber: coordRes.rows[0].phone
+              };
+            }
           }
         }
 

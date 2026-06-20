@@ -274,14 +274,33 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
 
+        let dataAgentId;
+        const agentRes = await query("SELECT id FROM data_agents WHERE user_id = $1", [agentId]);
+        if (agentRes.rows.length > 0) {
+          dataAgentId = agentRes.rows[0].id;
+        } else {
+          const insertAgentRes = await query(
+            "INSERT INTO data_agents (user_id) VALUES ($1) RETURNING id",
+            [agentId]
+          );
+          dataAgentId = insertAgentRes.rows[0].id;
+        }
+
+        // Resolve county name to county UUID
+        const countyRes = await query(
+          "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+          [countyId]
+        );
+        const countyUuid = countyRes.rows[0].id;
+
         await query(
-          `INSERT INTO circle_coordinators (agent_id, county_id, mpesa_number, active_from, active)
-           VALUES ($1, $2, pgp_sym_encrypt($3, $4), CURRENT_DATE, TRUE)
+          `INSERT INTO circle_coordinators (agent_id, county_id, mpesa_number, active_from, active, selected_by_community)
+           VALUES ($1, $2, $3, NOW(), TRUE, TRUE)
            ON CONFLICT (county_id) DO UPDATE 
            SET agent_id = EXCLUDED.agent_id, 
                mpesa_number = EXCLUDED.mpesa_number, 
                active = TRUE`,
-          [agentId, countyId, mpesaNumber, env.PGCRYPTO_SYMMETRIC_KEY]
+          [dataAgentId, countyUuid, mpesaNumber]
         );
 
         request.adminEntityType = "circle_coordinators";
@@ -307,10 +326,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       request.adminAction = "view_distributions";
       try {
         const res = await query(
-          `SELECT d.*, u.full_name AS coordinator_name
+          `SELECT d.*, 
+                  d.total_users_requesting AS total_users, 
+                  d.total_tokens_redeemed AS total_tokens, 
+                  u.full_name AS coordinator_name
            FROM dira_circle_distributions d
            JOIN circle_coordinators c ON d.coordinator_id = c.id
-           JOIN users u ON c.agent_id = u.id
+           JOIN data_agents da ON c.agent_id = da.id
+           JOIN users u ON da.user_id = u.id
            ORDER BY d.period_month DESC`
         );
         return {
@@ -1506,19 +1529,19 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         const res = await query(
           `SELECT 
              cc.id,
-             cc.agent_id,
+             da.user_id AS agent_id,
              cc.county_id,
-             pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS mpesa_number,
+             cc.mpesa_number AS mpesa_number,
              cc.active_from,
              cc.active,
-             cc.created_at,
+             cc.selected_by_community,
              u.full_name AS agent_name,
              u.email AS agent_email,
              u.telegram_username AS agent_telegram
            FROM circle_coordinators cc
-           JOIN users u ON cc.agent_id = u.id
-           ORDER BY cc.created_at DESC`,
-          [env.PGCRYPTO_SYMMETRIC_KEY]
+           JOIN data_agents da ON cc.agent_id = da.id
+           JOIN users u ON da.user_id = u.id
+           ORDER BY cc.active_from DESC`
         );
         return {
           success: true,
@@ -1545,7 +1568,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
            FROM users u
            WHERE u.role = 'agent'
              AND u.is_active = TRUE
-             AND u.id NOT IN (SELECT agent_id FROM circle_coordinators WHERE active = TRUE)
+             AND u.id NOT IN (
+               SELECT da.user_id 
+               FROM circle_coordinators cc 
+               JOIN data_agents da ON cc.agent_id = da.id 
+               WHERE cc.active = TRUE
+             )
              AND ($1::text IS NULL OR u.county = $1)
            ORDER BY u.full_name ASC`,
           [county || null]
@@ -1574,18 +1602,18 @@ export default async function adminRoutes(fastify: FastifyInstance) {
              cc.county_id,
              cc.id AS coordinator_id,
              u.full_name AS coordinator_name,
-             pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS coordinator_mpesa,
+             cc.mpesa_number AS coordinator_mpesa,
              COALESCE(SUM(rr.tokens_spent), 0)::integer AS total_tokens,
              COALESCE(SUM(rr.amount_kes), 0)::numeric AS total_kes,
              COUNT(DISTINCT rr.user_id)::integer AS total_users
            FROM circle_coordinators cc
-           JOIN users u ON cc.agent_id = u.id
+           JOIN data_agents da ON cc.agent_id = da.id
+           JOIN users u ON da.user_id = u.id
            LEFT JOIN users fu ON fu.county = cc.county_id
            LEFT JOIN redemption_requests rr ON rr.user_id = fu.id AND rr.redemption_type = 'circle' AND rr.status = 'pending'
            WHERE cc.active = TRUE
            GROUP BY cc.county_id, cc.id, u.full_name, cc.mpesa_number
-           ORDER BY total_kes DESC`,
-          [env.PGCRYPTO_SYMMETRIC_KEY]
+           ORDER BY total_kes DESC`
         );
         return {
           success: true,
@@ -1672,13 +1700,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           `SELECT 
              u.full_name AS coordinator_name,
              d.county_id AS county,
-             pgp_sym_decrypt(c.mpesa_number::bytea, $1) AS mpesa_number,
+             c.mpesa_number AS mpesa_number,
              d.total_kes_disbursed AS kes_amount
            FROM dira_circle_distributions d
            JOIN circle_coordinators c ON d.coordinator_id = c.id
-           JOIN users u ON c.agent_id = u.id
-           WHERE d.status = 'pending'`,
-          [env.PGCRYPTO_SYMMETRIC_KEY]
+           JOIN data_agents da ON c.agent_id = da.id
+           JOIN users u ON da.user_id = u.id
+           WHERE d.status = 'pending'`
         );
 
         let csv = "Coordinator Name,County,M-Pesa Number,KES Amount\n";

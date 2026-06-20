@@ -16,12 +16,14 @@
 
 import Fastify from "fastify";
 import jwt from "@fastify/jwt";
+import fp from "fastify-plugin";
 import { env } from "./config/env";
 import databasePlugin from "./plugins/database";
 import authPlugin from "./plugins/auth";
 import tokensRoutes from "./routes/tokens";
 import adminRoutes from "./routes/admin";
 import { pool } from "./db/pool";
+import { redis } from "./db/redis";
 import { tokenService } from "./services/tokenService";
 import { diraCircleService } from "./services/diraCircleService";
 import {
@@ -38,6 +40,15 @@ async function runCircleIntegrationTests() {
 
   // Register dependencies
   await server.register(jwt, { secret: env.JWT_SECRET });
+  
+  const adminJwtPlugin = (inst: any, opts: any, next: any) => {
+    return jwt(inst, opts, next);
+  };
+  await server.register(fp(adminJwtPlugin), {
+    secret: env.JWT_SECRET + "_admin_hardened",
+    namespace: "admin"
+  });
+
   await server.register(authPlugin);
   await server.register(databasePlugin);
 
@@ -100,9 +111,12 @@ async function runCircleIntegrationTests() {
     await tokenService.awardTokens(farmer2Id, 400, "Bonus Farmer 2", "bonus");
 
     // Generate JWT tokens
-    const adminToken = server.jwt.sign({ id: adminId, role: "admin" });
+    const adminToken = server.jwt.admin.sign({ id: adminId, role: "admin" });
     const farmer1Token = server.jwt.sign({ id: farmer1Id, role: "farmer" });
     const farmer2Token = server.jwt.sign({ id: farmer2Id, role: "farmer" });
+
+    // Register active session in Redis to bypass inactivity guard
+    await redis.set(`dira:admin:session:${adminId}`, "active", "EX", 7200);
 
     // --- TEST 1: Gated DIRA_CIRCLE_ACTIVE route ---
     console.log("\n--- TEST 1: Gated DIRA_CIRCLE_ACTIVE route ---");
@@ -166,9 +180,10 @@ async function runCircleIntegrationTests() {
 
     // Verify DB entry
     const coordDb = await pool.query(
-      `SELECT cc.id, pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS phone
-       FROM circle_coordinators cc WHERE cc.county_id = 'Mombasa'`,
-      [encryptionKey]
+      `SELECT cc.id, cc.mpesa_number AS phone
+       FROM circle_coordinators cc
+       JOIN counties ct ON cc.county_id = ct.id
+       WHERE ct.name = 'Mombasa'`
     );
     if (coordDb.rows.length === 0 || coordDb.rows[0].phone !== "+254700000002") {
       throw new Error("Coordinator was not correctly created or mpesa_number decrypted");
@@ -297,7 +312,9 @@ async function runCircleIntegrationTests() {
 
     // Check distribution record is created with status 'pending'
     const distDb = await pool.query(
-      `SELECT * FROM dira_circle_distributions WHERE county_id = 'Mombasa'`
+      `SELECT d.* FROM dira_circle_distributions d
+       JOIN counties ct ON d.county_id = ct.id
+       WHERE ct.name = 'Mombasa'`
     );
     if (distDb.rows.length !== 1) {
       throw new Error("Expected exactly one distribution record for Mombasa");
@@ -307,7 +324,7 @@ async function runCircleIntegrationTests() {
     if (distRecord.status !== "pending") {
       throw new Error(`Expected distribution status to be 'pending', got ${distRecord.status}`);
     }
-    if (Number(distRecord.total_users) !== 2 || Number(distRecord.total_tokens) !== 350 || Number(distRecord.total_kes_disbursed) !== 175.00) {
+    if (Number(distRecord.total_users_requesting) !== 2 || Number(distRecord.total_tokens_redeemed) !== 350 || Number(distRecord.total_kes_disbursed) !== 175.00) {
       throw new Error("Aggregated values on distribution record are incorrect");
     }
 
@@ -425,6 +442,11 @@ async function runCircleIntegrationTests() {
   } finally {
     console.log("Cleaning up connections...");
     await server.close();
+    try {
+      await redis.quit();
+    } catch (e) {
+      console.error("Failed to close Redis client:", e);
+    }
     try {
       await photoVerificationQueue.close();
       await atmosphericVerificationQueue.close();

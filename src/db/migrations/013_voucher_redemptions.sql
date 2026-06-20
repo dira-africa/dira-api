@@ -7,6 +7,7 @@ CREATE TABLE voucher_redemptions (
   kes_value DECIMAL(10,2) NOT NULL,
   voucher_code VARCHAR(64) NOT NULL UNIQUE,
   voucher_qr_hash VARCHAR(128) NOT NULL,
+  expires_at TIMESTAMPTZ,
   scanned_at TIMESTAMPTZ,
   reconciled_at TIMESTAMPTZ,
   status VARCHAR(20) DEFAULT 'pending',

@@ -103,6 +103,19 @@ export class VoucherService {
       throw new Error("INSUFFICIENT_TOKENS");
     }
 
+    // Ensure the user has a record in the farmers table
+    let farmerRes = await query("SELECT id FROM farmers WHERE user_id = $1", [farmerId]);
+    let farmerUuid;
+    if (farmerRes.rows.length === 0) {
+      const insertFarmer = await query(
+        "INSERT INTO farmers (user_id) VALUES ($1) RETURNING id",
+        [farmerId]
+      );
+      farmerUuid = insertFarmer.rows[0].id;
+    } else {
+      farmerUuid = farmerRes.rows[0].id;
+    }
+
     // 4. Construct JSON payload & Base64 encode
     const payloadObj = {
       voucherCode,
@@ -125,7 +138,7 @@ export class VoucherService {
     await query(
       `INSERT INTO voucher_redemptions (farmer_id, agro_dealer_id, token_amount, kes_value, voucher_code, voucher_qr_hash, expires_at, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'generated')`,
-      [farmerId, agroDealerId, tokenAmount, kesValue, voucherCode, signature, expiresAt]
+      [farmerUuid, agroDealerId, tokenAmount, kesValue, voucherCode, signature, expiresAt]
     );
 
     // 7. Generate QR code
@@ -352,17 +365,30 @@ This will be credited to your registered bank account shortly.`
     qrHash?: string;
     kesValue?: number;
   }> {
+    // Ensure the user has a record in the farmers table
+    let farmerRes = await query("SELECT id FROM farmers WHERE user_id = $1", [userId]);
+    let farmerUuid;
+    if (farmerRes.rows.length === 0) {
+      const insertFarmer = await query(
+        "INSERT INTO farmers (user_id) VALUES ($1) RETURNING id",
+        [userId]
+      );
+      farmerUuid = insertFarmer.rows[0].id;
+    } else {
+      farmerUuid = farmerRes.rows[0].id;
+    }
+
     const kesValue = tokenAmount * 1.0;
     const code = this.generateVoucherCode();
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000);
     const expiresAtStr = expiresAt.toISOString();
 
-    const qrHash = this.computeVoucherHash(code, userId, agroDealerId, tokenAmount, expiresAtStr);
+    const qrHash = this.computeVoucherHash(code, farmerUuid, agroDealerId, tokenAmount, expiresAtStr);
 
     await query(
       `INSERT INTO voucher_redemptions (farmer_id, agro_dealer_id, token_amount, kes_value, voucher_code, voucher_qr_hash, expires_at, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')`,
-      [userId, agroDealerId, tokenAmount, kesValue, code, qrHash, expiresAt]
+      [farmerUuid, agroDealerId, tokenAmount, kesValue, code, qrHash, expiresAt]
     );
 
     return {
@@ -388,7 +414,8 @@ This will be credited to your registered bank account shortly.`
     const res = await query(
       `SELECT vr.*, u.full_name AS farmer_name, ad.dealer_name
        FROM voucher_redemptions vr
-       JOIN users u ON vr.farmer_id = u.id
+       JOIN farmers f ON vr.farmer_id = f.id
+       JOIN users u ON f.user_id = u.id
        JOIN agro_dealers ad ON vr.agro_dealer_id = ad.id
        WHERE vr.voucher_code = $1`,
       [code]

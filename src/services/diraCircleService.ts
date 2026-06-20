@@ -35,10 +35,17 @@ export class DiraCircleService {
       throw new Error("Contribution amount must be greater than zero.");
     }
 
+    // Resolve county name to county UUID (insert if not exists)
+    const countyRes = await query(
+      "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+      [countyId]
+    );
+    const countyUuid = countyRes.rows[0].id;
+
     // 1. Verify that there is an active circle coordinator for this county
     const coordinatorRes = await query(
       "SELECT id FROM circle_coordinators WHERE county_id = $1 AND active = TRUE",
-      [countyId]
+      [countyUuid]
     );
 
     if (coordinatorRes.rows.length === 0) {
@@ -84,16 +91,16 @@ export class DiraCircleService {
     const distRes = await query(
       `SELECT id FROM dira_circle_distributions
        WHERE county_id = $1 AND period_month = DATE_TRUNC('month', CURRENT_TIMESTAMP)`,
-      [countyId]
+      [countyUuid]
     );
 
     if (distRes.rows.length > 0) {
       const distId = distRes.rows[0].id;
       // Increment tokens, KES, and optionally users count
-      const incrementUserSql = hasContributedThisMonth ? "" : ", total_users = total_users + 1";
+      const incrementUserSql = hasContributedThisMonth ? "" : ", total_users_requesting = total_users_requesting + 1";
       await query(
         `UPDATE dira_circle_distributions 
-         SET total_tokens = total_tokens + $1,
+         SET total_tokens_redeemed = total_tokens_redeemed + $1,
              total_kes_disbursed = total_kes_disbursed + $2
              ${incrementUserSql}
          WHERE id = $3`,
@@ -102,9 +109,9 @@ export class DiraCircleService {
     } else {
       // First distribution entry for this month
       await query(
-        `INSERT INTO dira_circle_distributions (county_id, coordinator_id, period_month, total_users, total_tokens, total_kes_disbursed, status)
+        `INSERT INTO dira_circle_distributions (county_id, coordinator_id, period_month, total_users_requesting, total_tokens_redeemed, total_kes_disbursed, status)
          VALUES ($1, $2, DATE_TRUNC('month', CURRENT_TIMESTAMP), 1, $3, $4, 'pending')`,
-        [countyId, coordinatorId, tokenAmount, kesValue]
+        [countyUuid, coordinatorId, tokenAmount, kesValue]
       );
     }
 
@@ -125,10 +132,11 @@ export class DiraCircleService {
     coordinatorName?: string;
   }> {
     const distRes = await query(
-      `SELECT d.total_tokens, d.total_users, u.full_name AS coordinator_name
+      `SELECT d.total_tokens_redeemed, d.total_users_requesting, u.full_name AS coordinator_name
        FROM dira_circle_distributions d
        JOIN circle_coordinators c ON d.coordinator_id = c.id
-       JOIN users u ON c.agent_id = u.id
+       JOIN data_agents da ON c.agent_id = da.id
+       JOIN users u ON da.user_id = u.id
        WHERE d.county_id = $1 AND d.period_month = DATE_TRUNC('month', CURRENT_TIMESTAMP)`,
       [countyId]
     );
@@ -137,7 +145,8 @@ export class DiraCircleService {
       // Return defaults if no distribution recorded yet
       const coordRes = await query(
         `SELECT u.full_name FROM circle_coordinators c
-         JOIN users u ON c.agent_id = u.id
+         JOIN data_agents da ON c.agent_id = da.id
+         JOIN users u ON da.user_id = u.id
          WHERE c.county_id = $1 AND c.active = TRUE`,
         [countyId]
       );
@@ -149,8 +158,8 @@ export class DiraCircleService {
     }
 
     return {
-      totalContributed: Number(distRes.rows[0].total_tokens),
-      membersCount: Number(distRes.rows[0].total_users),
+      totalContributed: Number(distRes.rows[0].total_tokens_redeemed),
+      membersCount: Number(distRes.rows[0].total_users_requesting),
       coordinatorName: distRes.rows[0].coordinator_name
     };
   }
@@ -184,10 +193,17 @@ export class DiraCircleService {
       throw new Error("COUNTY_NOT_SPECIFIED");
     }
 
+    // Resolve county name to county UUID (insert if not exists)
+    const countyRes = await query(
+      "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+      [countyId]
+    );
+    const countyUuid = countyRes.rows[0].id;
+
     // 2. Validate that there is an active circle coordinator for this county
     const coordinatorRes = await query(
       "SELECT id FROM circle_coordinators WHERE county_id = $1 AND active = TRUE",
-      [countyId]
+      [countyUuid]
     );
 
     if (coordinatorRes.rows.length === 0) {
@@ -224,15 +240,23 @@ export class DiraCircleService {
     countyId: string,
     periodMonth: Date
   ): Promise<{ coordinatorId: string; totalUsers: number; totalKes: number }> {
+    // Resolve county name to county UUID (insert if not exists)
+    const countyRes = await query(
+      "INSERT INTO counties (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+      [countyId]
+    );
+    const countyUuid = countyRes.rows[0].id;
+
     // 1. Get coordinator info
     const coordRes = await query(
       `SELECT cc.id, u.id AS user_id, u.full_name AS coordinator_name, 
-              pgp_sym_decrypt(cc.mpesa_number::bytea, $1) AS mpesa_number,
+              cc.mpesa_number AS mpesa_number,
               u.telegram_id AS coordinator_telegram_id
        FROM circle_coordinators cc
-       JOIN users u ON cc.agent_id = u.id
-       WHERE cc.county_id = $2 AND cc.active = TRUE`,
-      [env.PGCRYPTO_SYMMETRIC_KEY, countyId]
+       JOIN data_agents da ON cc.agent_id = da.id
+       JOIN users u ON da.user_id = u.id
+       WHERE cc.county_id = $1 AND cc.active = TRUE`,
+      [countyUuid]
     );
 
     if (coordRes.rows.length === 0) {
@@ -249,7 +273,7 @@ export class DiraCircleService {
        WHERE rr.redemption_type = 'circle'
          AND rr.status = 'pending'
          AND u.county = $1`,
-      [countyId]
+       [countyId]
     );
 
     const pendingRequests = pendingRequestsRes.rows;
@@ -272,10 +296,10 @@ export class DiraCircleService {
 
     // 4. Create dira_circle_distributions record with status 'pending'
     const distInsertRes = await query(
-      `INSERT INTO dira_circle_distributions (county_id, coordinator_id, period_month, total_users, total_tokens, total_kes_disbursed, status)
+      `INSERT INTO dira_circle_distributions (county_id, coordinator_id, period_month, total_users_requesting, total_tokens_redeemed, total_kes_disbursed, status)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending')
        RETURNING id`,
-      [countyId, coordinatorId, periodMonth, totalUsers, totalTokens, totalKes]
+      [countyUuid, coordinatorId, periodMonth, totalUsers, totalTokens, totalKes]
     );
 
     // 5. Notify admin via Telegram
@@ -335,10 +359,12 @@ ${userListStr}`
   ): Promise<boolean> {
     // 1. Fetch distribution record
     const distRes = await query(
-      `SELECT d.*, c.county_id, u.full_name AS coordinator_name
+      `SELECT d.*, ct.name AS county_name, u.full_name AS coordinator_name
        FROM dira_circle_distributions d
        JOIN circle_coordinators c ON d.coordinator_id = c.id
-       JOIN users u ON c.agent_id = u.id
+       JOIN counties ct ON d.county_id = ct.id
+       JOIN data_agents da ON c.agent_id = da.id
+       JOIN users u ON da.user_id = u.id
        WHERE d.id = $1`,
       [distributionId]
     );
@@ -347,7 +373,7 @@ ${userListStr}`
       throw new Error("DISTRIBUTION_NOT_FOUND");
     }
 
-    const { county_id: countyId, coordinator_name: coordinatorName } = distRes.rows[0];
+    const { county_name: countyName, coordinator_name: coordinatorName } = distRes.rows[0];
 
     // 2. Mark distribution as 'completed'
     await query(
@@ -373,7 +399,7 @@ ${userListStr}`
          AND rr.status = 'processing'
          AND u.county = $2
        RETURNING rr.user_id, rr.amount_kes, u.telegram_id, u.full_name`,
-      [transferReference, countyId]
+      [transferReference, countyName]
     );
 
     // 4. Notify all users via Telegram that their cash was distributed
@@ -383,7 +409,7 @@ ${userListStr}`
           const userKes = Number(row.amount_kes);
           await notificationsQueue.add("send-telegram", {
             telegramId: String(row.telegram_id),
-            message: `Habari! Your cash payout of KES ${userKes.toFixed(2)} has been successfully distributed by coordinator ${coordinatorName} for the Dira Circle pool in ${countyId} county. Reference: ${transferReference}`
+            message: `Habari! Your cash payout of KES ${userKes.toFixed(2)} has been successfully distributed by coordinator ${coordinatorName} for the Dira Circle pool in ${countyName} county. Reference: ${transferReference}`
           });
         } catch (err) {
           console.error(`Failed to notify user ${row.full_name} of distribution:`, err);
