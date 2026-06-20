@@ -29,8 +29,9 @@ CREATE TABLE token_transactions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   amount INTEGER NOT NULL,
-  type VARCHAR(50) NOT NULL, -- 'credit', 'debit'
+  type VARCHAR(50) NOT NULL, -- 'earn', 'redeem_airtime', etc.
   reference_id UUID,
+  status VARCHAR(20) NOT NULL DEFAULT 'confirmed',
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
