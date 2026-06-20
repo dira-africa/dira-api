@@ -227,3 +227,21 @@ export class TokenService {
 }
 
 export const tokenService = new TokenService();
+
+/**
+ * Refunds Climate Tokens to a user's balance (e.g. after a failed redemption).
+ * Implemented as a transaction using the creditTokens method.
+ */
+export async function refundTokens(
+  userId: string,
+  amount: number,
+  referenceId: string
+): Promise<void> {
+  await tokenService.creditTokens(
+    userId,
+    amount,
+    "adjustment",
+    referenceId,
+    `Refund for failed transaction ${referenceId}`
+  );
+}
