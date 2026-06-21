@@ -267,6 +267,22 @@ export class NotificationService {
     return this.sendMessage(user.telegram_id, text);
   }
 
+  async sendAirtimeConfirmed(userId: string, kesAmount: number, phone: string): Promise<void> {
+    return sendAirtimeConfirmed(userId, kesAmount, phone);
+  }
+
+  async sendVoucherGenerated(userId: string, kesValue: number, expiresAt: Date): Promise<void> {
+    return sendVoucherGenerated(userId, kesValue, expiresAt);
+  }
+
+  async sendCircleDistributionComplete(userId: string, kesAmount: number, coordinatorName: string): Promise<void> {
+    return sendCircleDistributionComplete(userId, kesAmount, coordinatorName);
+  }
+
+  async sendMpesaConfirmed(userId: string, kesAmount: number, mpesaCode: string): Promise<void> {
+    return sendMpesaConfirmed(userId, kesAmount, mpesaCode);
+  }
+
   // =========================================================================
   // --- Reminders & Summaries Generators ------------------------------------
   // =========================================================================
@@ -466,3 +482,135 @@ export class NotificationService {
 }
 
 export const notificationService = new NotificationService();
+
+export async function sendTelegramMessage(userId: string, text: string): Promise<void> {
+  const res = await query(
+    "SELECT telegram_id::text AS telegram_id FROM users WHERE id = $1",
+    [userId]
+  );
+  if (res.rows.length > 0 && res.rows[0].telegram_id) {
+    await notificationService.sendMessage(res.rows[0].telegram_id, text);
+  }
+}
+
+export async function sendAirtimeConfirmed(
+  userId: string, kesAmount: number, phone: string
+): Promise<void> {
+  const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+  const isSw = userRes.rows[0]?.language === "sw";
+
+  const lines = isSw ? [
+    `⚡ *Salio la Hewani Limetumwa!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} imewekwa kwenye nambari ${phone}.`,
+    ``,
+    `Salio lako litasasishwa ndani ya dakika 2.`,
+    `Endelea kusawazisha ili upate zaidi — 1 ya kusawazisha = tokeni 1 = KES 0.55 salio.`,
+    ``,
+    `[Angalia pochi yako](https://app.diraafrica.org/wallet)`
+  ] : [
+    `⚡ *Airtime Sent!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} has been topped up to ${phone}.`,
+    ``,
+    `Your balance will update within 2 minutes.`,
+    `Keep syncing to earn more — 1 sync = 1 token = KES 0.55 airtime.`,
+    ``,
+    `[Check your wallet](https://app.diraafrica.org/wallet)`
+  ];
+
+  await sendTelegramMessage(userId, lines.join('\n'));
+}
+
+export async function sendVoucherGenerated(
+  userId: string, kesValue: number, expiresAt: Date
+): Promise<void> {
+  const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+  const isSw = userRes.rows[0]?.language === "sw";
+
+  const expiryStr = expiresAt.toLocaleDateString(isSw ? 'sw-KE' : 'en-KE', {day:'numeric',month:'short'});
+
+  const lines = isSw ? [
+    `🌱 *Vocha ya Pembejeo za Kilimo Iko Tayari!*`,
+    ``,
+    `Vocha yako ya KES ${kesValue.toFixed(2)} imezalishwa.`,
+    ``,
+    `Onyesha msimbo wa QR kwa muuzaji wa pembejeo wa Dira ili kukomboa mbegu, mbolea, au ulinzi wa mazao.`,
+    ``,
+    `Inatumika hadi: ${expiryStr}`,
+    ``,
+    `[Angalia Msimbo wa QR wa Vocha](https://app.diraafrica.org/wallet/voucher)`
+  ] : [
+    `🌱 *Farm Input Voucher Ready!*`,
+    ``,
+    `Your KES ${kesValue.toFixed(2)} voucher has been generated.`,
+    ``,
+    `Show the QR code to your Dira partner agro-dealer to redeem seeds, fertilizer, or crop protection.`,
+    ``,
+    `Valid until: ${expiryStr}`,
+    ``,
+    `[View Voucher QR Code](https://app.diraafrica.org/wallet/voucher)`
+  ];
+
+  await sendTelegramMessage(userId, lines.join('\n'));
+}
+
+export async function sendCircleDistributionComplete(
+  userId: string, kesAmount: number, coordinatorName: string
+): Promise<void> {
+  const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+  const isSw = userRes.rows[0]?.language === "sw";
+
+  const lines = isSw ? [
+    `👥 *Malipo ya Dira Circle Yako Tayari!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} iko tayari kuchukuliwa.`,
+    ``,
+    `Chukua malipo yako kutoka kwa mratibu wa kaunti yako: ${coordinatorName}`,
+    `Hii itatolewa kwenye mkutano wenu ujao wa ushirika.`,
+    ``,
+    `Asante kwa kuchangia kwenye mtandao wa data ya hali ya hewa ya jamii yako.`
+  ] : [
+    `👥 *Dira Circle Payment Ready!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} is ready for collection.`,
+    ``,
+    `Collect your payment from your county coordinator: ${coordinatorName}`,
+    `This will be distributed at your next cooperative meeting.`,
+    ``,
+    `Thank you for contributing to your community's climate data network.`
+  ];
+
+  await sendTelegramMessage(userId, lines.join('\n'));
+}
+
+export async function sendMpesaConfirmed(
+  userId: string, kesAmount: number, mpesaCode: string
+): Promise<void> {
+  const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+  const isSw = userRes.rows[0]?.language === "sw";
+
+  const lines = isSw ? [
+    `📱 *Malipo ya M-Pesa Yametumwa!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} imetumwa kwenye M-Pesa yako.`,
+    `Msimbo wa muamala: ${mpesaCode}`,
+    ``,
+    `Malipo haya yalifadhiliwa na michango yako ya data ya hali ya hewa iliyothibitishwa.`,
+    `Data yako inajenga wavu wa usalama wa kilimo nchini Kenya.`,
+    ``,
+    `[Angalia historia yako ya mapato](https://app.diraafrica.org/wallet/history)`
+  ] : [
+    `📱 *M-Pesa Payment Sent!*`,
+    ``,
+    `KES ${kesAmount.toFixed(2)} has been sent to your M-Pesa.`,
+    `Transaction code: ${mpesaCode}`,
+    ``,
+    `This payment was funded by your verified climate data contributions.`,
+    `Your data is building the agricultural safety net for Kenya.`,
+    ``,
+    `[View your earning history](https://app.diraafrica.org/wallet/history)`
+  ];
+
+  await sendTelegramMessage(userId, lines.join('\n'));
+}
