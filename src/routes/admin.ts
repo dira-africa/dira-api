@@ -1475,7 +1475,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
         // Insert reconciliation log
         await client.query(
-          `INSERT INTO agro_dealer_reconciliations (agro_dealer_id, period_start, period_end, total_tokens, total_kes_owed, settlement_reference, settled_at, status)
+          `INSERT INTO agro_dealer_reconciliations (agro_dealer_id, period_start, period_end, total_tokens_redeemed, total_kes_owed, settlement_reference, settled_at, status)
            VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, 'settled')`,
           [id, periodStart, periodEnd, totalTokens, totalKesOwed, settlementReference.trim()]
         );
