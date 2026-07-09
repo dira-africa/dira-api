@@ -17,10 +17,6 @@ const envSchema = z.object({
   JWT_SECRET: z.string({
     required_error: "JWT_SECRET environment variable is required for authentication",
   }).min(16, "JWT_SECRET must be at least 16 characters long"),
-  DARAJA_PRODUCTION_ACTIVE: z
-    .string()
-    .default("false")
-    .transform((val) => val === "true" || val === "1"),
   DIRA_CIRCLE_ACTIVE: z
     .string()
     .default("true")
@@ -37,21 +33,18 @@ const envSchema = z.object({
     .default("SuperSecureDiraSecretPassphrase"),
   AFRICAS_TALKING_API_KEY: z.string().optional(),
   AFRICAS_TALKING_USERNAME: z.string().default("sandbox"),
-  DARAJA_CONSUMER_KEY: z.string().optional(),
-  DARAJA_CONSUMER_SECRET: z.string().optional(),
-  DARAJA_INITIATOR_NAME: z.string().optional(),
-  DARAJA_SECURITY_CREDENTIAL: z.string().optional(),
-  DARAJA_SHORTCODE: z.string().optional(),
   VOUCHER_SIGNING_SECRET: z
     .string()
     .min(32, "VOUCHER_SIGNING_SECRET must be at least 32 characters long")
     .default("SuperSecureVoucherSigningSecretPassphraseLength32"),
-  XION_RPC_URL: z.string().optional(),
-  XION_MNEMONIC: z.string().optional(),
-  XION_CONTRACT_ADDRESS: z.string().optional(),
-  ZKVERIFY_API_URL: z.string().optional(),
-  ZKVERIFY_VK_ID: z.string().optional(),
-  ZKVERIFY_SEED_PHRASE: z.string().optional(),
+  HEDERA_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
+  HEDERA_OPERATOR_ID: z.string().optional(),
+  HEDERA_OPERATOR_KEY: z.string().optional(),
+  DIRA_HCS_TOPIC_ID: z.string().optional(),
+  DIRA_HTS_TOKEN_ID: z.string().optional(),
+  PRETIUM_BASE_URL: z.string().optional(),
+  PRETIUM_API_KEY: z.string().optional(),
+  PRETIUM_WEBHOOK_SECRET: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -64,4 +57,17 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data;
+export const env = parsed.data as typeof parsed.data & {
+  DARAJA_PRODUCTION_ACTIVE?: boolean;
+  DARAJA_CONSUMER_KEY?: string;
+  DARAJA_CONSUMER_SECRET?: string;
+  DARAJA_INITIATOR_NAME?: string;
+  DARAJA_SECURITY_CREDENTIAL?: string;
+  DARAJA_SHORTCODE?: string;
+  XION_RPC_URL?: string;
+  XION_MNEMONIC?: string;
+  XION_CONTRACT_ADDRESS?: string;
+  ZKVERIFY_API_URL?: string;
+  ZKVERIFY_VK_ID?: string;
+  ZKVERIFY_SEED_PHRASE?: string;
+};
