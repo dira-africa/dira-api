@@ -1,6 +1,6 @@
 # Contributing to Dira Africa
 
-> **"The code is a gift to the world. The data, verified on Midnight, is the moat."**
+> **"The code is a gift to the world. The data, verified on Hedera, is the moat."**
 
 Thank you for your interest in contributing to Dira — a Decentralised Physical Infrastructure Network (DePIN) turning smartphones into a distributed weather sensing network across Sub-Saharan Africa. Every line of code contributed here helps smallholder farmers earn airtime, access crop health reports, and build climate resilience.
 
@@ -11,7 +11,6 @@ This document applies to all four Dira repositories:
 | [`dira-core`](https://github.com/dira-africa/dira-core) | Telegram Mini App — Next.js 14, TypeScript |
 | [`dira-api`](https://github.com/dira-africa/dira-api) | Fastify backend API, AI verification engine |
 | [`dira-docs`](https://github.com/dira-africa/dira-docs) | OpenAPI specs, API documentation, impact reports |
-| [`dira-contracts`](https://github.com/dira-africa/dira-contracts) | Compact smart contracts for Midnight blockchain |
 
 All Dira code is licensed under **Apache 2.0**. By contributing, you agree that your contributions will be licensed under the same terms.
 
@@ -30,10 +29,9 @@ All Dira code is licensed under **Apache 2.0**. By contributing, you agree that 
 9. [Security Contributions](#9-security-contributions)
 10. [Testing Requirements](#10-testing-requirements)
 11. [Documentation Contributions](#11-documentation-contributions)
-12. [Midnight / Compact Contract Contributions](#12-midnight--compact-contract-contributions)
-13. [Translation Contributions (English & Swahili)](#13-translation-contributions-english--swahili)
-14. [Recognition](#14-recognition)
-15. [Getting Help](#15-getting-help)
+12. [Translation Contributions (English & Swahili)](#12-translation-contributions-english--swahili)
+13. [Recognition](#13-recognition)
+14. [Getting Help](#14-getting-help)
 
 ---
 
@@ -89,15 +87,9 @@ Documentation lives in `dira-docs`. API spec improvements, clearer README sectio
 
 ### Add or improve Swahili translations
 
-All user-facing strings must exist in both English (`en`) and Swahili (`sw`). Swahili translation quality — particularly for agricultural terminology — is critical to the platform's adoption. See [Section 13](#13-translation-contributions-english--swahili).
-
-### Review pull requests
-
-Code review is a contribution. Leave clear, specific, constructive feedback. Focus on correctness, security, and real-world impact — not personal style preferences.
-
-### Write tests
-
-Test coverage for the circular economy payment layers, the AI verification pipeline, and the Midnight contract interactions is the highest-value testing work. See [Section 10](#10-testing-requirements).
+All user-facing strings must exist in both English (`en`) and Swahili (`sw`). Swahili translation quality — particularly for agricultural terminology — is critical to the platform's adoption. See [Section 12](#12-translation-contributions-english--swahili).
+   
+Test coverage for the circular economy payment layers and the AI verification pipeline is the highest-value testing work. See [Section 10](#10-testing-requirements).
 
 ---
 
@@ -132,9 +124,9 @@ cp .env.local.example .env.local
 **Never commit real credentials.** The `.env.local` file is in `.gitignore`. For local development:
 
 - Use Africa's Talking sandbox credentials (not production)
-- Use Safaricom Daraja sandbox credentials (not production)
-- Set `DARAJA_PRODUCTION_ACTIVE=false` — always false in development
-- Set `VOUCHERS_ACTIVE=false` unless you are specifically testing the voucher system
+- Use Hedera testnet credentials (not mainnet)
+- Use Pretium sandbox credentials (not production)
+- Set `VOUCHERS_ACTIVE` to `false` unless you are specifically testing the voucher system
 - Use a locally generated `JWT_SECRET` (minimum 64 characters)
 - Use a locally generated `VOUCHER_SIGNING_SECRET` (minimum 32 characters)
 
@@ -272,7 +264,7 @@ Dira uses [Conventional Commits](https://www.conventionalcommits.org/). Every co
 
 ### Scopes
 
-Use the module name: `auth`, `farmer`, `agent`, `tokens`, `airtime`, `voucher`, `circle`, `mpesa`, `ai`, `triangulation`, `midnight`, `admin`, `dashboard`, `notifications`, `security`, `db`, `api`, `docs`.
+Use the module name: `auth`, `farmer`, `agent`, `tokens`, `airtime`, `voucher`, `circle`, `pretium`, `ai`, `triangulation`, `hedera`, `admin`, `dashboard`, `notifications`, `security`, `db`, `api`, `docs`.
 
 ### Examples
 
@@ -363,8 +355,7 @@ Does this change break any existing API contracts, database schemas, or environm
 ### Review process
 
 - Every PR requires **at least one maintainer approval** before merging
-- PRs touching payment flows (airtime, vouchers, Dira Circle, M-Pesa) require **two approvals**
-- PRs touching the Midnight smart contracts require **two approvals plus a security note**
+- PRs touching payment flows (airtime, vouchers, Dira Circle, Pretium) require **two approvals**
 - Maintainers aim to review within **48 hours** of a PR being opened
 - Address all review comments before requesting re-review
 - Do not merge your own PR — even if you have write access
@@ -507,7 +498,7 @@ Before opening any PR, verify your change does not introduce:
 - [ ] New environment variables that are not validated by Zod at startup
 - [ ] GPS coordinates that are not validated against the Kenya bounding box
 - [ ] Pressure readings that are not validated against the physical range (870–1084 hPa)
-- [ ] Any change to `DARAJA_PRODUCTION_ACTIVE` — this flag defaults to `false` and is changed only through a formal activation process documented in the build guide
+
 
 ### Known security-sensitive areas
 
@@ -518,10 +509,9 @@ Contributions to the following areas receive extra scrutiny and require two revi
 | `POST /auth/telegram` | Entry point for all users — HMAC verification must be exact |
 | `POST /tokens/redeem/*` | All four circular economy payment endpoints touch real money |
 | `POST /partner/voucher/scan` | HMAC signature verification — replay and forgery risks |
-| `POST /webhooks/daraja/result` | Safaricom IP allowlist — fake callbacks could trigger fraudulent credits |
+| `POST /webhooks/pretium/result` | Pretium IP allowlist — fake callbacks could trigger fraudulent credits |
 | `src/services/aiService.ts` | Photo processing — memory management and file path traversal |
 | `src/db/migrations/` | Schema changes are permanent and affect data integrity |
-| `contracts/` | Compact contracts are immutable once deployed to Midnight Mainnet |
 
 ---
 
@@ -536,10 +526,9 @@ Contributions to the following areas receive extra scrutiny and require two revi
 | `airtime` redemption | 90% | Real money to real phones |
 | `voucher` system | 90% | Security-critical HMAC path |
 | `circle` distribution | 85% | Coordinator payout logic |
-| `mpesa` / Daraja | 85% | Only active in production |
+| `pretium` | 85% | Pretium mobile money B2C |
 | `ai` verification | 80% | Photo pipeline |
 | `triangulation` | 80% | Atmospheric verification |
-| `midnight` | 75% | Contract interaction layer |
 
 ### Test file location
 
@@ -567,8 +556,7 @@ For any function that touches financial data (token ledger, airtime, vouchers, c
 1. **Happy path** — the normal successful flow
 2. **Insufficient balance** — attempt to spend more tokens than available
 3. **Race condition** — two simultaneous redemption requests with the same balance
-4. **Rollback** — if the external API (AT, Daraja) fails, tokens must be refunded
-5. **Flag gate** — if `DARAJA_PRODUCTION_ACTIVE=false`, M-Pesa routes must return 503
+4. **Rollback** — if the external API (AT, Pretium) fails, tokens must be refunded
 
 For any function that validates geographic or physical data:
 
@@ -665,42 +653,11 @@ All API changes in `dira-api` must be accompanied by an update to `dira-docs/ope
         description: Rate limit exceeded (maximum 3 redemptions per hour)
 ```
 
----
 
-## 12. Midnight / Compact Contract Contributions
-
-The Dira smart contracts in `dira-contracts` are held to the highest standard of any code in the platform. Once deployed to Midnight Mainnet, they **cannot be changed**. Every contribution to the contracts directory is treated as production-critical.
-
-### Before contributing to contracts
-
-1. Complete the [Midnight Developer Academy](https://docs.midnight.network/develop/tutorial/) beginner and intermediate modules
-2. Read the Compact language specification in full
-3. Understand Midnight's dual-ledger model (public state vs shielded private state)
-4. Never submit a Compact contract PR without a corresponding test suite
-
-### Contract contribution process
-
-1. All contract development happens on Testnet first — minimum 30 days of Testnet operation before a Mainnet deployment PR is opened
-2. Every contract PR must include:
-   - The `.compact` contract file
-   - A complete `.test.ts` test suite
-   - A `SECURITY.md` file for that contract describing the threat model
-   - An `AUDIT.md` template (to be completed by external auditors before Mainnet deployment)
-3. Mainnet deployment PRs require two maintainer approvals **plus** a completed `AUDIT.md` showing zero Critical and zero High findings from an external security review
-
-### What belongs on-chain vs off-chain
-
-| On-chain (Midnight) | Off-chain (PostgreSQL) |
-|---|---|
-| Weekly batch hash (Merkle root of verified data point IDs) | Individual farmer readings and GPS coordinates |
-| ZK Data Certificate status (VALID/INVALID/PENDING) | The readings used to generate the certificate |
-| Contract access control (authorised oracle address) | User identities and phone numbers |
-
-Never put personally identifiable information on-chain. The purpose of the Midnight integration is to provide tamper-proof provenance of the *existence* of verified data — not to publish the data itself.
 
 ---
 
-## 13. Translation Contributions (English & Swahili)
+## 12. Translation Contributions (English & Swahili)
 
 All user-facing strings in Dira must exist in both English (`en`) and Swahili (`sw`). Translation is one of the most impactful contributions a non-developer can make.
 
@@ -745,7 +702,7 @@ All Swahili translations must be reviewed by at least one native Swahili speaker
 
 ---
 
-## 14. Recognition
+## 13. Recognition
 
 Every contributor to Dira is acknowledged. We believe in transparent, public recognition of the open-source community that makes this platform possible.
 
@@ -757,7 +714,7 @@ Every contributor to Dira is acknowledged. We believe in transparent, public rec
 
 ---
 
-## 15. Getting Help
+## 14. Getting Help
 
 | Channel | Purpose |
 |---|---|

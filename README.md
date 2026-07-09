@@ -6,11 +6,10 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-4.x-black.svg)](https://fastify.dev/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791.svg)](https://www.postgresql.org/)
-[![XION](https://img.shields.io/badge/XION-Mainnet-orange.svg)](https://xion.burnt.com/)
-[![zkVerify](https://img.shields.io/badge/zkVerify-Mainnet-purple.svg)](https://zkverify.io/)
+[![Hedera](https://img.shields.io/badge/Hedera-HCS%20%26%20HTS-green.svg)](https://hedera.com/)
 [![Code of Conduct](https://img.shields.io/badge/Contributor%20Covenant-2.1-4baaaa.svg)](CODE_OF_CONDUCT.md)
 
-The Fastify REST API that powers the Dira platform. Handles all authentication, data ingestion, AI crop verification, atmospheric triangulation, the four-layer circular economy payment system, Telegram bot notifications, and the XION and zkVerify blockchain anchoring services.
+The Fastify REST API that powers the Dira platform. Handles all authentication, data ingestion, AI crop verification, atmospheric triangulation, the four-layer circular economy payment system, Telegram bot notifications, and the Hedera (HCS & HTS) blockchain anchoring services.
 
 ---
 
@@ -19,7 +18,7 @@ The Fastify REST API that powers the Dira platform. Handles all authentication, 
 | Path | Purpose |
 |---|---|
 | `/src/routes/` | One file per feature module |
-| `/src/services/` | Business logic — token, airtime, voucher, circle, payment, AI, triangulation, XION & zkVerify, notification |
+| `/src/services/` | Business logic — token, airtime, voucher, circle, payment, AI, triangulation, Hedera anchoring, notification |
 | `/src/jobs/` | BullMQ job definitions and workers |
 | `/src/db/` | PostgreSQL plugin, 15 migration files, migration runner |
 | `/src/plugins/` | Fastify plugins — database, JWT auth, rate limiting |
@@ -41,8 +40,8 @@ The Fastify REST API that powers the Dira platform. Handles all authentication, 
 - **Payment Layer 1:** Africa's Talking (airtime — Day 1, no float required)
 - **Payment Layer 2:** Farm input voucher QR codes (HMAC-SHA256 signed)
 - **Payment Layer 3:** Dira Circle (county-level community cash pool — one bank transfer per county per month)
-- **Payment Layer 4:** Safaricom Daraja B2C (M-Pesa — flag-gated behind `DARAJA_PRODUCTION_ACTIVE`)
-- **Blockchain:** XION & zkVerify (weekly batch anchoring and ZK validation)
+- **Payment Layer 4:** Pretium (mobile money B2C cash-out supporting all Kenyan & Ugandan telcos)
+- **Blockchain:** Hedera (Consensus Service for provenance anchoring, Token Service for rewards mirroring)
 - **Notifications:** Telegram Bot API
 - **Deployment:** Coolify on Hetzner, Dockerised
 
@@ -139,11 +138,11 @@ Full OpenAPI 3.0 specification lives in [`dira-docs`](https://github.com/dira-af
 | `POST` | `/tokens/redeem/airtime` | JWT | Redeem tokens for Africa's Talking airtime |
 | `POST` | `/tokens/redeem/voucher` | JWT | Generate farm input voucher QR code |
 | `POST` | `/tokens/redeem/circle` | JWT | Register for Dira Circle cash distribution |
-| `POST` | `/tokens/redeem/mpesa` | JWT | M-Pesa B2C redemption (returns 503 if `DARAJA_PRODUCTION_ACTIVE != true`) |
+| `POST` | `/tokens/redeem/pretium` | JWT | Pretium mobile money B2C redemption |
 | `POST` | `/partner/voucher/scan` | Dealer token | Agro-dealer scans a farmer voucher QR |
 | `GET` | `/public/stats` | None | Aggregated network statistics (Redis cached) |
 | `GET` | `/public/coverage-map` | None | GeoJSON heatmap — no individual user data |
-| `POST` | `/webhooks/daraja/result` | IP allowlist | Safaricom B2C payment callback |
+| `POST` | `/webhooks/pretium/result` | IP allowlist | Pretium B2C payment callback |
 
 ---
 
@@ -156,7 +155,7 @@ The database uses sequential migration files:
 | 001–003 | Core platform authentication, role management (`users`, `user_roles`, `sessions`), Farmers (`farmers`, `farmer_profiles`, `crop_types`), and Data Agents (`data_agents`, `agent_certifications`) |
 | 004–006 | Cooperatives & counties (`counties`, `cooperatives`), atmospheric consensus (`atmospheric_readings`, `atmospheric_triangulations`), crop photos and AI verification (`crop_photos`, `ai_analysis_results`) |
 | 007–010 | Climate token ledger (`token_ledger`, `token_transfers`), redemptions & M-Pesa config (`payment_requests`, `redemption_requests`, `mpesa_activation_settings`), API clients, and audit logs |
-| 011–012 | zkVerify anchoring layer (`zkverify_anchors`, `batch_contents`, `zkverify_certificates`) |
+| 011–012 | Hedera HCS anchoring layer (`hedera_anchors`, `batch_contents`, `hedera_certificates`) |
 | 013–015 | Circular economy integrations (`voucher_redemptions`, `agro_dealer_reconciliations`, `circle_coordinators`, `dira_circle_distributions`, `county_cash_pools`, `agro_dealers`) |
 
 All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table has a database-level `CHECK (balance_after >= 0)` constraint — negative balances cannot exist even if application code has a bug.
@@ -175,7 +174,7 @@ All phone numbers are encrypted at rest using pgcrypto. The `token_ledger` table
 | Phone numbers | Encrypted at rest with pgcrypto `pgp_sym_encrypt`. Key in environment variable only. |
 | Daraja callbacks | IP allowlist — only Safaricom's documented IP ranges are accepted |
 | Voucher QR codes | HMAC-SHA256 signed with `VOUCHER_SIGNING_SECRET`. Timing-safe comparison on scan. One-time use enforced at database level. |
-| M-Pesa flag gate | `DARAJA_PRODUCTION_ACTIVE` environment variable — must be `false` in all development and staging environments |
+| Pretium gateway | Pretium API sandbox mode — verified at startup to ensure no production credentials are loaded in development |
 | Logging | Fastify redacts `Authorization`, `phone_number`, `initData`, and any field named `token`, `secret`, or `key` |
 | Secrets | Validated at startup by Zod — server refuses to start with any missing or malformed required variable |
 
@@ -187,12 +186,16 @@ Key variables — see `.env.example` for the complete list:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `DARAJA_PRODUCTION_ACTIVE` | `false` | **Never set to `true` in dev.** Activates M-Pesa B2C. Two conditions required before activating in production. |
+| `HEDERA_OPERATOR_ID` | — | Hedera Account ID for transaction submission |
+| `HEDERA_OPERATOR_KEY` | — | Hedera Operator private key for HCS/HTS operations |
+| `HEDERA_TOKEN_ID` | — | Hedera Token Service Climate Token ID |
+| `HEDERA_TOPIC_ID` | — | Hedera Consensus Service Topic ID for telemetry anchoring |
+| `PRETIUM_API_KEY` | — | Pretium API credential key |
+| `PRETIUM_API_URL` | — | Pretium API sandbox or production endpoint URL |
 | `VOUCHERS_ACTIVE` | `false` | Set `true` only when first agro-dealer MOU is signed |
 | `DIRA_CIRCLE_ACTIVE` | `false` | Set `true` only when first county coordinator is confirmed |
 | `VOUCHER_SIGNING_SECRET` | — | Minimum 32 characters. Server refuses to start if shorter. |
 | `PGCRYPTO_SYMMETRIC_KEY` | — | Used to encrypt phone numbers at rest. Never stored in DB. |
-| `XION_NETWORK` | `testnet` | XION network node configuration |
 
 ---
 
@@ -215,7 +218,7 @@ PRs touching payment flows require two reviewer approvals. For security vulnerab
 | [GitHub Discussions](https://github.com/dira-africa/dira-api/discussions) | Architecture questions and ideas |
 | community@diraafrica.org | General inquiries |
 | security@diraafrica.org | Security vulnerabilities (private) |
-| conduct@diraafrica.org | Code of Conduct reports (private) |
+| conduct@dira.africa | Code of Conduct reports (private) |
 
 ---
 
