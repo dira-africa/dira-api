@@ -33,7 +33,6 @@ import usersRoutes from "./routes/users";
 import airtimeRoutes from "./routes/payments/airtime";
 import vouchersRoutes from "./routes/payments/vouchers";
 import circleRoutes from "./routes/payments/circle";
-import mpesaRoutes from "./routes/payments/mpesa";
 
 const server = Fastify({
   logger: {
@@ -135,7 +134,6 @@ async function main() {
     await server.register(airtimeRoutes, { prefix: "/api/payments/airtime" });
     await server.register(vouchersRoutes, { prefix: "/api/payments/vouchers" });
     await server.register(circleRoutes, { prefix: "/api/payments/circle" });
-    await server.register(mpesaRoutes, { prefix: "/api/payments/mpesa" });
 
     // security.txt route
     server.get("/.well-known/security.txt", async (request, reply) => {

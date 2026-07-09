@@ -23,7 +23,6 @@ import airtimeRoutes from "./routes/payments/airtime";
 import vouchersRoutes from "./routes/payments/vouchers";
 import partnerRoutes from "./routes/partner";
 import paymentsCircleRoutes from "./routes/payments/circle";
-import mpesaRoutes from "./routes/payments/mpesa";
 import { pool } from "./db/pool";
 import { tokenService } from "./services/tokenService";
 
@@ -42,7 +41,6 @@ async function runTests() {
   await server.register(vouchersRoutes, { prefix: "/api/payments/vouchers" });
   await server.register(partnerRoutes, { prefix: "/api/partner" });
   await server.register(paymentsCircleRoutes, { prefix: "/api/payments/circle" });
-  await server.register(mpesaRoutes, { prefix: "/api/payments/mpesa" });
 
   await server.ready();
 
