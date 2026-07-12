@@ -23,7 +23,7 @@ import authPlugin from "./plugins/auth";
 import jobsPlugin from "./plugins/jobs";
 import adminRoutes from "./routes/admin";
 import { pool } from "./db/pool";
-import { xionService } from "./services/xionService";
+import { hederaAnchorService } from "./services/hederaAnchorService";
 import { redis } from "./db/redis";
 
 async function runTests() {
@@ -98,8 +98,8 @@ async function runTests() {
     }
 
     console.log("Cleaning up previous test data...");
-    await pool.query("DELETE FROM zkverify_certificates");
-    await pool.query("DELETE FROM zkverify_anchors");
+    await pool.query("DELETE FROM hedera_certificates");
+    await pool.query("DELETE FROM hedera_anchors");
     await pool.query("DELETE FROM atmospheric_readings");
     await pool.query("DELETE FROM users WHERE telegram_id IN (99887766, 99887767)");
 
@@ -128,7 +128,7 @@ async function runTests() {
 
     // --- TEST 1: Merkle Root Calculation ---
     console.log("\n--- TEST 1: Merkle Root Calculation ---");
-    const emptyRoot = xionService.computeMerkleRoot([]);
+    const emptyRoot = hederaAnchorService.computeMerkleRoot([]);
     console.log("Empty root:", emptyRoot);
     if (!emptyRoot || emptyRoot.length !== 64) {
       throw new Error("Empty Merkle Root calculation failed.");
@@ -139,7 +139,7 @@ async function runTests() {
       "e38bf349-2e3b-48cd-8a24-91e8df10950b",
       "f48cf350-2e3c-48ce-8a25-92e8df10950c"
     ];
-    const merkleRoot = xionService.computeMerkleRoot(testIds);
+    const merkleRoot = hederaAnchorService.computeMerkleRoot(testIds);
     console.log("3-item Merkle root:", merkleRoot);
     if (!merkleRoot || merkleRoot.length !== 64) {
       throw new Error("Standard Merkle Root calculation failed.");
@@ -148,7 +148,7 @@ async function runTests() {
 
     // --- TEST 2: Weekly Anchor (Direct Service Call) ---
     console.log("\n--- TEST 2: Weekly Anchor (Direct Service Call) ---");
-    const week20Range = xionService.getISOWeekRange(2026, 20);
+    const week20Range = hederaAnchorService.getISOWeekRange(2026, 20);
     const midWeek20 = new Date(week20Range.start.getTime() + 2 * 24 * 60 * 60 * 1000); // Wednesday of Week 20
 
     await pool.query(
@@ -159,14 +159,14 @@ async function runTests() {
       [agentId, midWeek20]
     );
 
-    const anchorRes = await xionService.anchorWeeklyBatch(202620);
+    const anchorRes = await hederaAnchorService.anchorWeeklyBatch(202620);
     console.log("Anchor result:", anchorRes);
     if (!anchorRes.anchored || anchorRes.dataPointCount !== 1) {
       throw new Error("Weekly batch anchoring failed.");
     }
 
     const dbAnchorRes = await pool.query(
-      "SELECT * FROM zkverify_anchors WHERE week_number = 202620"
+      "SELECT * FROM hedera_anchors WHERE week_number = 202620"
     );
     if (dbAnchorRes.rows.length === 0) {
       throw new Error("Weekly anchor not saved in database.");
@@ -176,7 +176,7 @@ async function runTests() {
 
     // --- TEST 3: Completed Weeks Catch-up Anchoring ---
     console.log("\n--- TEST 3: Completed Weeks Catch-up Anchoring ---");
-    const week21Range = xionService.getISOWeekRange(2026, 21);
+    const week21Range = hederaAnchorService.getISOWeekRange(2026, 21);
     const midWeek21 = new Date(week21Range.start.getTime() + 2 * 24 * 60 * 60 * 1000); // Wednesday of Week 21
 
     await pool.query(
@@ -188,14 +188,14 @@ async function runTests() {
     );
 
     // Running catchup
-    const catchupRes = await xionService.anchorAllCompletedWeeks();
+    const catchupRes = await hederaAnchorService.anchorAllCompletedWeeks();
     console.log("Catchup result:", catchupRes);
     if (!catchupRes.success || catchupRes.anchoredWeeksCount !== 1) {
       throw new Error("Historical completed weeks catchup anchoring failed.");
     }
 
     const dbAnchorCheck21 = await pool.query(
-      "SELECT * FROM zkverify_anchors WHERE week_number = 202621"
+      "SELECT * FROM hedera_anchors WHERE week_number = 202621"
     );
     if (dbAnchorCheck21.rows.length === 0) {
       throw new Error("Weekly catch-up anchor for week 202621 was not saved.");
@@ -206,11 +206,11 @@ async function runTests() {
     console.log("\n--- TEST 4: Certificate Generation ---");
     const startDate = new Date("2026-05-10");
     const endDate = new Date("2026-05-17");
-    const certRes = await xionService.issueCertificate("NBI", startDate, endDate, "High Quality Ingestion", 0.98);
+    const certRes = await hederaAnchorService.issueCertificate("NBI", startDate, endDate, "High Quality Ingestion", 0.98);
     console.log("Certificate result:", certRes);
 
     const dbCertRes = await pool.query(
-      "SELECT * FROM zkverify_certificates WHERE cert_id = $1",
+      "SELECT * FROM hedera_certificates WHERE cert_id = $1",
       [certRes.certId]
     );
     if (dbCertRes.rows.length === 0) {
@@ -222,36 +222,36 @@ async function runTests() {
     // --- TEST 5: Admin HTTP Endpoints ---
     console.log("\n--- TEST 5: Admin HTTP Endpoints ---");
     
-    // Test 5A: GET /api/admin/xion-zkverify/status
+    // Test 5A: GET /api/admin/hedera/status
     const statusRes = await server.inject({
       method: "GET",
-      url: "/api/admin/xion-zkverify/status",
+      url: "/api/admin/hedera/status",
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     console.log(`GET status response: ${statusRes.statusCode}`);
     const statusBody = JSON.parse(statusRes.payload);
     if (statusRes.statusCode !== 200 || !statusBody.success) {
-      throw new Error("GET /api/admin/xion-zkverify/status failed.");
+      throw new Error("GET /api/admin/hedera/status failed.");
     }
     console.log("Anchors in status:", statusBody.anchors.length);
     console.log("Certificates in status:", statusBody.certificates.length);
 
-    // Test 5B: POST /api/admin/xion-zkverify/anchor
+    // Test 5B: POST /api/admin/hedera/anchor
     const postAnchorRes = await server.inject({
       method: "POST",
-      url: "/api/admin/xion-zkverify/anchor",
+      url: "/api/admin/hedera/anchor",
       headers: { Authorization: `Bearer ${adminToken}` }
     });
     console.log(`POST anchor response: ${postAnchorRes.statusCode}`);
     const postAnchorBody = JSON.parse(postAnchorRes.payload);
     if (postAnchorRes.statusCode !== 200 || !postAnchorBody.success) {
-      throw new Error("POST /api/admin/xion-zkverify/anchor failed.");
+      throw new Error("POST /api/admin/hedera/anchor failed.");
     }
 
-    // Test 5C: POST /api/admin/xion-zkverify/certificate
+    // Test 5C: POST /api/admin/hedera/certificate
     const postCertRes = await server.inject({
       method: "POST",
-      url: "/api/admin/xion-zkverify/certificate",
+      url: "/api/admin/hedera/certificate",
       headers: { Authorization: `Bearer ${adminToken}` },
       payload: {
         countyCode: "KUM",
@@ -264,7 +264,7 @@ async function runTests() {
     console.log(`POST certificate response: ${postCertRes.statusCode}`);
     const postCertBody = JSON.parse(postCertRes.payload);
     if (postCertRes.statusCode !== 200 || !postCertBody.success) {
-      throw new Error("POST /api/admin/xion-zkverify/certificate failed.");
+      throw new Error("POST /api/admin/hedera/certificate failed.");
     }
     console.log("✅ Test 5 passed!");
 
@@ -274,21 +274,21 @@ async function runTests() {
       throw new Error("BullMQ Queue is not decorated on the Fastify instance.");
     }
 
-    const repeatableJobs = await server.xionAnchorQueue.getRepeatableJobs();
-    console.log("Registered repeatable jobs count on xionAnchorQueue:", repeatableJobs.length);
+    const repeatableJobs = await server.hederaAnchorQueue.getRepeatableJobs();
+    console.log("Registered repeatable jobs count on hederaAnchorQueue:", repeatableJobs.length);
     for (const rJob of repeatableJobs) {
       console.log(`- Job: ${rJob.name}, Pattern: ${rJob.pattern}, Key: ${rJob.key}`);
     }
 
-    const anchoringJobExists = repeatableJobs.some(j => j.name === "xion-weekly-anchoring");
+    const anchoringJobExists = repeatableJobs.some(j => j.name === "hedera-weekly-anchoring");
     if (!anchoringJobExists) {
       throw new Error("Repeatable anchoring job is not correctly registered in BullMQ Queue.");
     }
     console.log("✅ Test 6 passed!");
 
-    console.log("\n⭐️ ALL XION & BULLMQ INTEGRATION TESTS PASSED SUCCESSFULLY! ⭐️");
+    console.log("\n⭐️ ALL HEDERA & BULLMQ INTEGRATION TESTS PASSED SUCCESSFULLY! ⭐️");
   } catch (err) {
-    console.error("❌ XION & BullMQ test suite failed:", err);
+    console.error("❌ Hedera & BullMQ test suite failed:", err);
     process.exit(1);
   } finally {
     await server.close();

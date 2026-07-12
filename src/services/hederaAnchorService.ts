@@ -18,20 +18,7 @@ import { query } from "../db/query";
 import { createHash } from "crypto";
 import { env } from "../config/env";
 
-export class XionService {
-  /**
-   * Checks if XION and zkVerify credentials are fully configured in the environment.
-   */
-  isXionConfigured(): boolean {
-    return !!(
-      env.XION_RPC_URL &&
-      env.XION_MNEMONIC &&
-      env.XION_CONTRACT_ADDRESS &&
-      env.ZKVERIFY_API_URL &&
-      env.ZKVERIFY_VK_ID
-    );
-  }
-
+export class HederaAnchorService {
   /**
    * Computes the Merkle Root of a list of UUID strings.
    * IDs are sorted alphabetically to ensure deterministic hash trees.
@@ -107,11 +94,11 @@ export class XionService {
    */
   async anchorWeeklyBatch(weekNumber: number): Promise<{
     anchored: boolean;
-    xionTxHash?: string;
+    hcsTxId?: string;
     batchHash?: string;
     dataPointCount?: number;
-    zkverifyProofId?: string;
-    zkverifyTxHash?: string;
+    hcsSequenceNumber?: string;
+    htsTxId?: string;
   }> {
     const year = Math.floor(weekNumber / 100);
     const week = weekNumber % 100;
@@ -133,51 +120,39 @@ export class XionService {
     const ids = res.rows.map(row => row.id as string);
     const batchHash = this.computeMerkleRoot(ids);
 
-    let zkverifyProofId = "";
-    let zkverifyTxHash = "";
-    let xionTxHash = "";
+    // Stub anchoring values (Hedera integration pending)
+    const hcsTxId = null;
+    const hcsSequenceNumber = null;
+    const htsTxId = null;
 
-    if (this.isXionConfigured()) {
-      // Connect to zkVerify API (Mocked integration logic for production SDK)
-      zkverifyProofId = `zkv_proof_${createHash("sha256").update(`proof_week_${weekNumber}_${batchHash}`).digest("hex").substring(0, 24)}`;
-      zkverifyTxHash = `0xzkv_tx_${createHash("sha256").update(zkverifyProofId).digest("hex").substring(0, 32)}`;
-
-      // Connect to XION CosmWasm client (Mocked CosmJS client calling execute)
-      // CosmWasm Execution: client.execute(sender, contractAddress, { AnchorWeek: { week_number: weekNumber, merkle_root: batchHash } })
-      xionTxHash = `0xxion_tx_${createHash("sha256").update(`${weekNumber}_${batchHash}_xion`).digest("hex").substring(0, 32)}`;
-    } else {
-      // Sandbox fallback mocks
-      zkverifyProofId = `zkv_mock_proof_${createHash("sha256").update(`mock_${weekNumber}`).digest("hex").substring(0, 24)}`;
-      zkverifyTxHash = `0xzkv_mock_tx_${createHash("sha256").update(zkverifyProofId).digest("hex").substring(0, 32)}`;
-      xionTxHash = `0xxion_mock_tx_${createHash("sha256").update(`${weekNumber}_mock`).digest("hex").substring(0, 32)}`;
-    }
+    console.log(`Hedera anchoring pending for week ${weekNumber} with batch root ${batchHash}`);
 
     await query(
-      `INSERT INTO zkverify_anchors (week_number, batch_hash, data_point_count, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at)
+      `INSERT INTO hedera_anchors (week_number, batch_hash, data_point_count, hcs_tx_id, hcs_sequence_number, hts_tx_id, anchored_at)
        VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP)
        ON CONFLICT (week_number) DO UPDATE
        SET batch_hash = EXCLUDED.batch_hash,
            data_point_count = EXCLUDED.data_point_count,
-           xion_tx_hash = EXCLUDED.xion_tx_hash,
-           zkverify_proof_id = EXCLUDED.zkverify_proof_id,
-           zkverify_tx_hash = EXCLUDED.zkverify_tx_hash,
+           hcs_tx_id = EXCLUDED.hcs_tx_id,
+           hcs_sequence_number = EXCLUDED.hcs_sequence_number,
+           hts_tx_id = EXCLUDED.hts_tx_id,
            anchored_at = EXCLUDED.anchored_at`,
-      [weekNumber, batchHash, dataPointCount, xionTxHash, zkverifyProofId, zkverifyTxHash]
+      [weekNumber, batchHash, dataPointCount, hcsTxId, hcsSequenceNumber, htsTxId]
     );
 
     return {
       anchored: true,
-      xionTxHash,
+      hcsTxId: hcsTxId || undefined,
       batchHash,
       dataPointCount,
-      zkverifyProofId,
-      zkverifyTxHash,
+      hcsSequenceNumber: hcsSequenceNumber || undefined,
+      htsTxId: htsTxId || undefined,
     };
   }
 
   /**
    * Finds all past completed weeks since the first verified reading,
-   * and anchors any weeks that are not yet recorded in the xion_anchors table.
+   * and anchors any weeks that are not yet recorded in the hedera_anchors table.
    */
   async anchorAllCompletedWeeks(): Promise<{
     success: boolean;
@@ -212,7 +187,7 @@ export class XionService {
 
       // Check if already anchored
       const anchorCheck = await query(
-        "SELECT id FROM zkverify_anchors WHERE week_number = $1",
+        "SELECT id FROM hedera_anchors WHERE week_number = $1",
         [weekNumber]
       );
 
@@ -245,9 +220,9 @@ export class XionService {
   ): Promise<{
     success: boolean;
     certId: string;
-    xionTxHash: string;
-    zkVerifyProofId: string;
-    zkVerifyTxHash: string;
+    hcsTxId?: string;
+    hcsSequenceNumber?: string;
+    htsTxId?: string;
   }> {
     const startStr = periodStart.toISOString().split("T")[0];
     const endStr = periodEnd.toISOString().split("T")[0];
@@ -256,45 +231,31 @@ export class XionService {
     const certPayload = `${countyCode}_${startStr}_${endStr}_${conditionType}_${confidenceThreshold.toFixed(3)}`;
     const certId = createHash("sha256").update(certPayload).digest("hex");
     
-    let zkVerifyProofId = "";
-    let zkVerifyTxHash = "";
-    let xionTxHash = "";
-
-    if (this.isXionConfigured()) {
-      // Connect to zkVerify API
-      zkVerifyProofId = `zkv_cert_proof_${createHash("sha256").update(certId).digest("hex").substring(0, 24)}`;
-      zkVerifyTxHash = `0xzkv_cert_tx_${createHash("sha256").update(zkVerifyProofId).digest("hex").substring(0, 32)}`;
-
-      // Connect to XION CosmWasm client and register certificate
-      // client.execute(sender, contractAddress, { RegisterCertificate: { ... } })
-      xionTxHash = `0xxion_cert_tx_${createHash("sha256").update(`${certId}_xion`).digest("hex").substring(0, 32)}`;
-    } else {
-      // Sandbox mock fallback
-      zkVerifyProofId = `zkv_cert_mock_proof_${createHash("sha256").update(certId).digest("hex").substring(0, 24)}`;
-      zkVerifyTxHash = `0xzkv_cert_mock_tx_${createHash("sha256").update(zkVerifyProofId).digest("hex").substring(0, 32)}`;
-      xionTxHash = `0xxion_cert_mock_tx_${createHash("sha256").update(certId).digest("hex").substring(0, 32)}`;
-    }
+    // Stub anchoring values (Hedera integration pending)
+    const hcsTxId = null;
+    const hcsSequenceNumber = null;
+    const htsTxId = null;
 
     await query(
-      `INSERT INTO zkverify_certificates (
-        cert_id, county_code, period_start, period_end, condition_type, confidence_threshold, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, issued_at
+      `INSERT INTO hedera_certificates (
+        cert_id, county_code, period_start, period_end, condition_type, confidence_threshold, hcs_tx_id, hcs_sequence_number, hts_tx_id, issued_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CURRENT_TIMESTAMP)
        ON CONFLICT (cert_id) DO UPDATE
-       SET xion_tx_hash = EXCLUDED.xion_tx_hash,
-           zkverify_proof_id = EXCLUDED.zkverify_proof_id,
-           zkverify_tx_hash = EXCLUDED.zkverify_tx_hash,
+       SET hcs_tx_id = EXCLUDED.hcs_tx_id,
+           hcs_sequence_number = EXCLUDED.hcs_sequence_number,
+           hts_tx_id = EXCLUDED.hts_tx_id,
            issued_at = EXCLUDED.issued_at`,
-      [certId, countyCode, periodStart, periodEnd, conditionType, confidenceThreshold, xionTxHash, zkVerifyProofId, zkVerifyTxHash]
+      [certId, countyCode, periodStart, periodEnd, conditionType, confidenceThreshold, hcsTxId, hcsSequenceNumber, htsTxId]
     );
 
     return {
       success: true,
       certId,
-      xionTxHash,
-      zkVerifyProofId,
-      zkVerifyTxHash
+      hcsTxId: hcsTxId || undefined,
+      hcsSequenceNumber: hcsSequenceNumber || undefined,
+      htsTxId: htsTxId || undefined,
     };
   }
 }
 
-export const xionService = new XionService();
+export const hederaAnchorService = new HederaAnchorService();

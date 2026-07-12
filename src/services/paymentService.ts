@@ -32,7 +32,7 @@ export class PaymentService {
     conversationId?: string;
     errorMessage?: string;
   }> {
-    throw new Error("M-Pesa integration via Safaricom Daraja has been retired. Pretium integration is pending.");
+    throw new Error("Mobile money cashout via Pretium is pending integration.");
   }
 
   /**

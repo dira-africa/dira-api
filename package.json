@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "migrate": "ts-node src/db/migrate.ts",
     "create-admin": "tsx src/scripts/create-admin.ts",
-    "test:xion": "tsx src/test_xion_jobs.ts"
+    "test:hedera": "tsx src/test_hedera_jobs.ts"
   },
   "keywords": [
     "fastify",
@@ -37,7 +37,7 @@
     "pg": "^8.21.0",
     "qrcode": "^1.5.4",
     "sharp": "^0.34.5",
-    "zkverifyjs": "^2.5.0",
+
     "zod": "^3.23.8"
   },
   "devDependencies": {

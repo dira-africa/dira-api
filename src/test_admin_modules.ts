@@ -26,7 +26,7 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  xionAnchorQueue
+  hederaAnchorQueue
 } from "./jobs/queues";
 import bcryptjs from "bcryptjs";
 import fp from "fastify-plugin";
@@ -119,7 +119,7 @@ async function runTests() {
     console.log("Seeding test M-Pesa settings...");
     await pool.query(
       `INSERT INTO mpesa_activation_settings (key, value) VALUES
-       ('daraja_credentials_approved', FALSE),
+       ('pretium_credentials_approved', FALSE),
        ('first_b2b_revenue_received', FALSE)
        ON CONFLICT (key) DO NOTHING`
     );
@@ -356,7 +356,7 @@ async function runTests() {
       `INSERT INTO redemption_requests (id, user_id, tokens_spent, redemption_type, amount_kes, status, initiated_at, phone_number, failure_reason)
        VALUES 
          ('5c29a8a7-75cb-4db8-8422-79ee88667cb1', $1, 50, 'airtime', 50.00, 'completed', CURRENT_TIMESTAMP - INTERVAL '1 day', pgp_sym_encrypt('254712345678', $2), NULL),
-         ('5c29a8a7-75cb-4db8-8422-79ee88667cb2', $1, 200, 'mpesa', 200.00, 'failed', CURRENT_TIMESTAMP, pgp_sym_encrypt('254787654321', $2), 'Daraja M-Pesa client timeout error')`,
+         ('5c29a8a7-75cb-4db8-8422-79ee88667cb2', $1, 200, 'mpesa', 200.00, 'failed', CURRENT_TIMESTAMP, pgp_sym_encrypt('254787654321', $2), 'Mobile money client timeout error')`,
       [farmerId, env.PGCRYPTO_SYMMETRIC_KEY]
     );
 
@@ -379,7 +379,7 @@ async function runTests() {
     if (financials.circulation !== 41) { // 25 (adjust) + 15 (crop) + 1 (weather)
       throw new Error(`Expected circulation to be 41, got ${financials.circulation}`);
     }
-    if (financials.failed.length !== 1 || financials.failed[0].failure_reason !== "Daraja M-Pesa client timeout error") {
+    if (financials.failed.length !== 1 || financials.failed[0].failure_reason !== "Mobile money client timeout error") {
       throw new Error("Failed redemption record missing or incorrect metadata.");
     }
     // Verify phone masking in redemptions list
@@ -620,7 +620,7 @@ async function runTests() {
     });
     console.log("Get Settings Status:", settingsGetRes.statusCode);
     const mpesaSettings = JSON.parse(settingsGetRes.payload);
-    if (settingsGetRes.statusCode !== 200 || mpesaSettings.settings.daraja_credentials_approved !== false) {
+    if (settingsGetRes.statusCode !== 200 || mpesaSettings.settings.pretium_credentials_approved !== false) {
       throw new Error(`Unexpected initial settings structure: ${settingsGetRes.payload}`);
     }
 
@@ -629,7 +629,7 @@ async function runTests() {
       method: "PATCH",
       url: "/api/admin/mpesa-settings",
       headers: authHeader,
-      payload: { key: "daraja_credentials_approved", value: true }
+      payload: { key: "pretium_credentials_approved", value: true }
     });
     console.log("Patch Setting Status:", settingsPatchRes.statusCode);
     if (settingsPatchRes.statusCode !== 200) {
@@ -643,7 +643,7 @@ async function runTests() {
       headers: authHeader
     });
     const mpesaSettings2 = JSON.parse(settingsGetRes2.payload);
-    if (mpesaSettings2.settings.daraja_credentials_approved !== true) {
+    if (mpesaSettings2.settings.pretium_credentials_approved !== true) {
       throw new Error("Checked setting did not persistently save in database.");
     }
     console.log("✅ Test 9 passed (M-Pesa persistent checklist read and write verified)!");
@@ -769,7 +769,7 @@ async function runTests() {
     await photoVerificationQueue.close();
     await atmosphericVerificationQueue.close();
     await notificationsQueue.close();
-    await xionAnchorQueue.close();
+    await hederaAnchorQueue.close();
     await redis.quit();
     await server.close();
   }

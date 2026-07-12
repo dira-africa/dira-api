@@ -57,17 +57,4 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data as typeof parsed.data & {
-  DARAJA_PRODUCTION_ACTIVE?: boolean;
-  DARAJA_CONSUMER_KEY?: string;
-  DARAJA_CONSUMER_SECRET?: string;
-  DARAJA_INITIATOR_NAME?: string;
-  DARAJA_SECURITY_CREDENTIAL?: string;
-  DARAJA_SHORTCODE?: string;
-  XION_RPC_URL?: string;
-  XION_MNEMONIC?: string;
-  XION_CONTRACT_ADDRESS?: string;
-  ZKVERIFY_API_URL?: string;
-  ZKVERIFY_VK_ID?: string;
-  ZKVERIFY_SEED_PHRASE?: string;
-};
+export const env = parsed.data;

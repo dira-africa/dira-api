@@ -498,7 +498,7 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 9. POST /api/tokens/redeem/mpesa - Redeem Climate Tokens for Safaricom Daraja B2C Cashout
+  // 9. POST /api/tokens/redeem/mpesa - Redeem Climate Tokens for Mobile Money Cashout (Pretium pending)
   fastify.post<{ Body: { tokenAmount?: number; token_amount?: number; phoneNumber?: string; phone_number?: string } }>(
     "/redeem/mpesa",
     {
@@ -513,11 +513,12 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
       },
     },
     async (request, reply) => {
-      if (!env.DARAJA_PRODUCTION_ACTIVE) {
+      const isPretiumActive = false;
+      if (!isPretiumActive) {
         return reply.status(503).send({
           error: {
             code: "MPESA_NOT_YET_ACTIVE",
-            message: "M-Pesa payouts are coming soon. Use airtime redemption now."
+            message: "Mobile money payouts are coming soon. Use airtime redemption now."
           }
         });
       }

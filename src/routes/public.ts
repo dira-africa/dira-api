@@ -5,7 +5,7 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  xionAnchorQueue
+  hederaAnchorQueue
 } from "../jobs/queues";
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -304,7 +304,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get(
-    "/public/xion-anchors",
+    "/public/hedera-anchors",
     {
       config: {
         rateLimit: {
@@ -316,29 +316,29 @@ export default async function publicRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
     try {
-      const anchors = await getCachedOrRun("dira:public:xion-anchors", 300, async () => {
+      const anchors = await getCachedOrRun("dira:public:hedera-anchors", 300, async () => {
         const res = await query(
-          `SELECT week_number, batch_hash, xion_tx_hash, zkverify_proof_id, zkverify_tx_hash, anchored_at 
-           FROM zkverify_anchors 
+          `SELECT week_number, batch_hash, hcs_tx_id, hcs_sequence_number, hts_tx_id, anchored_at 
+           FROM hedera_anchors 
            ORDER BY week_number DESC LIMIT 5`
         );
 
         return res.rows.map((row: any) => ({
           weekNumber: row.week_number,
           batchHash: row.batch_hash.trim(),
-          xionTxHash: row.xion_tx_hash,
-          zkverifyProofId: row.zkverify_proof_id,
-          zkverifyTxHash: row.zkverify_tx_hash,
+          hcsTxId: row.hcs_tx_id,
+          hcsSequenceNumber: row.hcs_sequence_number,
+          htsTxId: row.hts_tx_id,
           anchoredAt: row.anchored_at
         }));
       });
 
       return { success: true, anchors };
     } catch (err: any) {
-      fastify.log.error("Failed to fetch XION anchors:", err);
+      fastify.log.error("Failed to fetch Hedera anchors:", err);
       return reply.status(500).send({
         success: false,
-        error: { code: "SERVER_ERROR", message: "Failed to fetch XION blockchain anchor updates." }
+        error: { code: "SERVER_ERROR", message: "Failed to fetch Hedera blockchain anchor updates." }
       });
     }
   });
@@ -408,7 +408,7 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           getQueueStats(photoVerificationQueue, "photo-verification"),
           getQueueStats(atmosphericVerificationQueue, "atmospheric-verification"),
           getQueueStats(notificationsQueue, "notifications"),
-          getQueueStats(xionAnchorQueue, "xion-anchor")
+          getQueueStats(hederaAnchorQueue, "hedera-anchor")
         ]);
 
         return {

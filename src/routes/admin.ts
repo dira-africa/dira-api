@@ -19,7 +19,7 @@ import rateLimit from "@fastify/rate-limit";
 import "../plugins/jobs";
 import { query } from "../db/query";
 import { pool } from "../db/pool";
-import { xionService } from "../services/xionService";
+import { hederaAnchorService } from "../services/hederaAnchorService";
 import { diraCircleService } from "../services/diraCircleService";
 import { paymentService } from "../services/paymentService";
 import { env } from "../config/env";
@@ -28,7 +28,7 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  xionAnchorQueue
+  hederaAnchorQueue
 } from "../jobs/queues";
 
 interface CertificateBody {
@@ -81,7 +81,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       try {
         const farmersRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'farmer'");
         const agentsRes = await query("SELECT COUNT(*) AS count FROM users WHERE role = 'agent'");
-        const anchorsRes = await query("SELECT COUNT(*) AS count FROM zkverify_anchors");
+        const anchorsRes = await query("SELECT COUNT(*) AS count FROM hedera_anchors");
         
         return {
           success: true,
@@ -98,13 +98,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 2. POST /api/admin/xion-zkverify/anchor - Trigger catchup anchoring for completed weeks
+  // 2. POST /api/admin/hedera/anchor - Trigger catchup anchoring for completed weeks
   fastify.post(
-    "/xion-zkverify/anchor",
+    "/hedera/anchor",
     async (request, reply) => {
-      request.adminAction = "xion_anchor";
+      request.adminAction = "hedera_anchor";
       try {
-        const result = await xionService.anchorAllCompletedWeeks();
+        const result = await hederaAnchorService.anchorAllCompletedWeeks();
         return result;
       } catch (err: any) {
         return reply.status(500).send({
@@ -115,9 +115,9 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 3. POST /api/admin/xion-zkverify/certificate - Issue certificate
+  // 3. POST /api/admin/hedera/certificate - Issue certificate
   fastify.post<{ Body: CertificateBody }>(
-    "/xion-zkverify/certificate",
+    "/hedera/certificate",
     async (request, reply) => {
       request.adminAction = "issue_certificate";
       const { countyCode, periodStart, periodEnd, conditionType, confidenceThreshold } = request.body;
@@ -130,7 +130,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }
 
       try {
-        const result = await xionService.issueCertificate(
+        const result = await hederaAnchorService.issueCertificate(
           countyCode,
           new Date(periodStart),
           new Date(periodEnd),
@@ -140,11 +140,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
         if (result.success && result.certId) {
           // Retrieve UUID of generated certificate
-          const certQuery = await query("SELECT id FROM zkverify_certificates WHERE cert_id = $1", [result.certId]);
+          const certQuery = await query("SELECT id FROM hedera_certificates WHERE cert_id = $1", [result.certId]);
           if (certQuery.rows.length > 0) {
             request.adminEntityId = certQuery.rows[0].id;
           }
-          request.adminEntityType = "zkverify_certificates";
+          request.adminEntityType = "hedera_certificates";
         }
 
         return result;
@@ -157,14 +157,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // 4. GET /api/admin/xion-zkverify/status - Retrieve XION blockchain registry status
+  // 4. GET /api/admin/hedera/status - Retrieve Hedera blockchain registry status
   fastify.get(
-    "/xion-zkverify/status",
+    "/hedera/status",
     async (request, reply) => {
-      request.adminAction = "view_xion_status";
+      request.adminAction = "view_hedera_status";
       try {
-        const anchorsRes = await query("SELECT * FROM zkverify_anchors ORDER BY week_number DESC LIMIT 50");
-        const certificatesRes = await query("SELECT * FROM zkverify_certificates ORDER BY created_at DESC LIMIT 50");
+        const anchorsRes = await query("SELECT * FROM hedera_anchors ORDER BY week_number DESC LIMIT 50");
+        const certificatesRes = await query("SELECT * FROM hedera_certificates ORDER BY created_at DESC LIMIT 50");
 
         return {
           success: true,
@@ -174,7 +174,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       } catch (err: any) {
         return reply.status(500).send({
           success: false,
-          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve XION registry status." }
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve Hedera registry status." }
         });
       }
     }
@@ -232,7 +232,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           getQueueStats(photoVerificationQueue, "photo-verification"),
           getQueueStats(atmosphericVerificationQueue, "atmospheric-verification"),
           getQueueStats(notificationsQueue, "notifications"),
-          getQueueStats(xionAnchorQueue, "xion-anchor")
+          getQueueStats(hederaAnchorQueue, "hedera-anchor")
         ]);
 
         return {
@@ -1747,7 +1747,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
         return {
           success: true,
-          darajaProductionActive: env.DARAJA_PRODUCTION_ACTIVE,
+          pretiumActive: false,
           settings
         };
       } catch (err: any) {
@@ -1773,7 +1773,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const allowedKeys = ["daraja_credentials_approved", "first_b2b_revenue_received"];
+      const allowedKeys = ["pretium_credentials_approved", "first_b2b_revenue_received"];
       if (!allowedKeys.includes(key)) {
         return reply.status(400).send({
           success: false,
@@ -1865,7 +1865,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // 4. Trigger B2C payout request via Safaricom Daraja
+        // 4. Trigger B2C payout request via Pretium mobile money
         const triggerRes = await paymentService.triggerMpesaB2C(phone, amountKes);
 
         if (triggerRes.success && triggerRes.conversationId) {
@@ -1886,7 +1886,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
             conversationId: triggerRes.conversationId
           };
         } else {
-          const errMsg = triggerRes.errorMessage || "Failed to trigger Safaricom Daraja request";
+          const errMsg = triggerRes.errorMessage || "Failed to trigger cashout request";
           
           // Roll back: credit tokens back to the user
           await tokenService.creditTokens(

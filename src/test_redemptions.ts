@@ -23,6 +23,7 @@ import airtimeRoutes from "./routes/payments/airtime";
 import vouchersRoutes from "./routes/payments/vouchers";
 import partnerRoutes from "./routes/partner";
 import paymentsCircleRoutes from "./routes/payments/circle";
+import tokensRoutes from "./routes/tokens";
 import { pool } from "./db/pool";
 import { tokenService } from "./services/tokenService";
 
@@ -41,6 +42,7 @@ async function runTests() {
   await server.register(vouchersRoutes, { prefix: "/api/payments/vouchers" });
   await server.register(partnerRoutes, { prefix: "/api/partner" });
   await server.register(paymentsCircleRoutes, { prefix: "/api/payments/circle" });
+  await server.register(tokensRoutes, { prefix: "/api/tokens" });
 
   await server.ready();
 
@@ -288,15 +290,13 @@ async function runTests() {
     console.log("✅ Test 3 passed!");
 
 
-    // --- TEST 4: Month 3-4 Safaricom M-Pesa Flow (Gated) ---
-    console.log("\n--- TEST 4: Month 3-4 Safaricom M-Pesa Flow (Gated) ---");
+    // --- TEST 4: Month 3-4 Mobile Money Cashout Flow (Gated/Pending) ---
+    console.log("\n--- TEST 4: Month 3-4 Mobile Money Cashout Flow (Gated/Pending) ---");
     
-    // 4A. Test gate returning 503 Service Unavailable when flag is false
-    env.DARAJA_PRODUCTION_ACTIVE = false;
-
+    // Test that the cashout route returns 503 Service Unavailable since Pretium is pending
     const resMpesaGated = await server.inject({
       method: "POST",
-      url: "/api/payments/mpesa/cashout",
+      url: "/api/tokens/redeem/mpesa",
       headers: { Authorization: `Bearer ${farmerToken}` },
       payload: { tokenAmount: 100, phoneNumber: "+254711000000" }
     });
@@ -304,31 +304,7 @@ async function runTests() {
     const bodyMpesaGated = JSON.parse(resMpesaGated.payload);
     console.log("Gated response body:", bodyMpesaGated);
     if (resMpesaGated.statusCode !== 503 || bodyMpesaGated.success !== false) {
-      throw new Error("Expected 503 Service Unavailable for gated B2C route.");
-    }
-
-    // 4B. Toggle flag to true to test trigger flow
-    env.DARAJA_PRODUCTION_ACTIVE = true;
-
-    const resMpesaSuccess = await server.inject({
-      method: "POST",
-      url: "/api/payments/mpesa/cashout",
-      headers: { Authorization: `Bearer ${farmerToken}` },
-      payload: { tokenAmount: 100, phoneNumber: "+254711000000" }
-    });
-    console.log(`Active M-Pesa status: ${resMpesaSuccess.statusCode}`);
-    const bodyMpesaSuccess = JSON.parse(resMpesaSuccess.payload);
-    console.log("Active response body:", bodyMpesaSuccess);
-
-    if (resMpesaSuccess.statusCode !== 200 || !bodyMpesaSuccess.success) {
-      throw new Error("M-Pesa active trigger failed.");
-    }
-
-    // Check balance reduced to 200
-    const bal4 = await tokenService.getBalance(farmerId);
-    console.log("Current balance after active M-Pesa cashout:", bal4.balance);
-    if (bal4.balance !== 200) {
-      throw new Error(`Expected balance 200, got ${bal4.balance}`);
+      throw new Error("Expected 503 Service Unavailable for pending B2C route.");
     }
     console.log("✅ Test 4 passed!");
 

@@ -30,7 +30,7 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  xionAnchorQueue
+  hederaAnchorQueue
 } from "./jobs/queues";
 
 async function runCircleIntegrationTests() {
@@ -451,7 +451,7 @@ async function runCircleIntegrationTests() {
       await photoVerificationQueue.close();
       await atmosphericVerificationQueue.close();
       await notificationsQueue.close();
-      await xionAnchorQueue.close();
+      await hederaAnchorQueue.close();
     } catch (e) {
       console.error("Failed to close BullMQ queues:", e);
     }

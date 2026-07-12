@@ -23,16 +23,11 @@ and settles redemptions to mobile money, airtime, community pools and vouchers.
 - **Redemption:** Africa's Talking (airtime), Pretium (stablecoin → M-Pesa cash),
   Dira Circle (community pool), agro-dealer QR vouchers.
 
-## Migration in progress — remove, do not extend
-This repo is being migrated OFF XION + zkVerify + Midnight. When you touch related
-code, replace it with the Hedera equivalent; do not build on the old rails:
-- Replace `src/services/anchorService.ts` (zkVerify / `zkverifyjs`) and
-  `src/services/xionService.ts` + `src/jobs/xionAnchorJob.ts` with a Hedera anchor
-  service + job.
-- Remove `contracts/DiraDataAnchor.compact` and `contracts/DiraDataCertificate.compact`.
-- Remove `zkverifyjs` and any XION deps from `package.json`.
-- In `src/config/env.ts`, remove `XION_*` and `ZKVERIFY_*`; add `HEDERA_*` and
-  `PRETIUM_*`.
+## Migration status — XION/zkVerify/Midnight → Hedera (COMPLETED)
+The old XION + zkVerify + Midnight stack has been fully removed. Anchoring and
+certificate services now use Hedera naming (HCS / HTS). The Daraja M-Pesa
+integration was replaced with Pretium mobile money stubs. If you encounter any
+residual XION/zkVerify/Midnight references, remove them.
 
 ## Stack & conventions
 - **Runtime:** Node.js + TypeScript (strict), Fastify 4. Dev: `npm run dev` (tsx).
@@ -54,7 +49,7 @@ code, replace it with the Hedera equivalent; do not build on the old rails:
   atmospheric, tokens, partner (B2B), payments/*, public, webhooks).
 - `src/services/*` — business logic (aiService, triangulationService,
   tokenService, airtimeService, paymentService, voucherService, diraCircleService,
-  dpaService, notificationService, anchorService → to be replaced by Hedera).
+  dpaService, notificationService, hederaAnchorService).
 - `src/scripts/*` — one-off scripts (e.g. `create-admin.ts`). **New Hedera
   provisioning scripts (create topic / create token) go here.**
 - `src/db/migrations/*` — schema.
