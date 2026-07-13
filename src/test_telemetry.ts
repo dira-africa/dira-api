@@ -34,7 +34,7 @@ Queue.prototype.getJobCounts = async function() {
 // Mock database pool
 import { pool } from "./db/pool";
 
-pool.query = async (text: string, params?: any[]) => {
+(pool as any).query = async (text: any, params: any[] = []) => {
   const normalizedText = text.trim().replace(/\s+/g, " ");
 
   if (normalizedText.includes("SELECT 1")) {

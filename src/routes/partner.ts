@@ -165,7 +165,7 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
     }
   );
 
-  // Helper to verify dealer API token
+  // Helper to verify dealer API token (aligned with database schema)
   async function verifyDealerApiToken(request: any, reply: any) {
     const authHeader = request.headers.authorization || request.headers["x-api-key"] || "";
     let token = "";
@@ -184,18 +184,83 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
 
     const keyHash = createHash("sha256").update(token).digest("hex");
     const res = await query(
-      "SELECT id, role, active FROM api_clients WHERE key_hash = $1 AND active = TRUE",
+      "SELECT id, permissions, is_active FROM api_clients WHERE key_hash = $1 AND is_active = TRUE",
       [keyHash]
     );
 
-    if (res.rows.length === 0 || (res.rows[0].role !== "dealer" && res.rows[0].role !== "admin")) {
+    if (res.rows.length === 0) {
       return reply.status(401).send({
         success: false,
         error: { code: "UNAUTHORIZED", message: "Invalid or unauthorized API token." }
       });
     }
 
-    request.apiClient = res.rows[0];
+    const client = res.rows[0];
+    const permissions = client.permissions || [];
+    if (!permissions.includes("dealer") && !permissions.includes("admin")) {
+      return reply.status(401).send({
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "Invalid or unauthorized API token." }
+      });
+    }
+
+    request.apiClient = client;
+  }
+
+  // Helper to verify partner API key with scoping and database rate limiting
+  async function verifyPartnerApiKey(request: any, reply: any) {
+    const authHeader = request.headers.authorization || request.headers["x-api-key"] || "";
+    let token = "";
+    if (authHeader.startsWith("Bearer ")) {
+      token = authHeader.substring(7);
+    } else {
+      token = authHeader;
+    }
+
+    if (!token) {
+      return reply.status(401).send({
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "API key token is missing." }
+      });
+    }
+
+    const keyHash = createHash("sha256").update(token).digest("hex");
+    const res = await query(
+      "SELECT id, client_name, permissions, rate_limit_per_hour, is_active FROM api_clients WHERE key_hash = $1 AND is_active = TRUE",
+      [keyHash]
+    );
+
+    if (res.rows.length === 0) {
+      return reply.status(401).send({
+        success: false,
+        error: { code: "UNAUTHORIZED", message: "Invalid or unauthorized API token." }
+      });
+    }
+
+    const client = res.rows[0];
+    const permissions = client.permissions || [];
+    if (!permissions.includes("verify_provenance") && !permissions.includes("admin")) {
+      return reply.status(403).send({
+        success: false,
+        error: { code: "FORBIDDEN", message: "Forbidden: Client lacks 'verify_provenance' scope." }
+      });
+    }
+
+    // Rate Limiting Check
+    const limit = client.rate_limit_per_hour || 1000;
+    const usageRes = await query(
+      "SELECT COUNT(*) AS count FROM api_usage_logs WHERE client_id = $1 AND created_at >= NOW() - INTERVAL '1 hour'",
+      [client.id]
+    );
+    const count = Number(usageRes.rows[0]?.count || 0);
+    if (count >= limit) {
+      return reply.status(429).send({
+        success: false,
+        error: { code: "RATE_LIMIT_EXCEEDED", message: "Rate limit exceeded. Try again later." }
+      });
+    }
+
+    request.apiClient = client;
   }
 
   interface ScanVoucherBody {
@@ -301,6 +366,135 @@ export default async function partnerRoutes(fastify: FastifyInstance) {
         success: true,
         vouchers: res.rows
       };
+    }
+  );
+
+  interface VerifyQuery {
+    hash?: string;
+    topic?: string;
+    seq?: string;
+  }
+
+  // 5. GET /api/partner/verify - Insurers verify provenance against Hedera attestations
+  fastify.get<{ Querystring: VerifyQuery }>(
+    "/verify",
+    { preHandler: [verifyPartnerApiKey] },
+    async (request, reply) => {
+      const { hash, topic, seq } = request.query;
+      const client = (request as any).apiClient;
+
+      if (!hash && (!topic || !seq)) {
+        const errCode = 400;
+        await query(
+          "INSERT INTO api_usage_logs (client_id, endpoint, response_code) VALUES ($1, $2, $3)",
+          [client.id, "/api/partner/verify", errCode]
+        );
+        return reply.status(errCode).send({
+          success: false,
+          error: {
+            code: "MISSING_PARAMETERS",
+            message: "You must provide either a 'hash' query parameter or both 'topic' and 'seq' query parameters."
+          }
+        });
+      }
+
+      try {
+        let res: any;
+        if (hash) {
+          res = await query(
+            `SELECT consensus_timestamp, sequence_number, hcs_topic_id, network 
+             FROM hedera_attestations 
+             WHERE sha256 = $1`,
+            [hash.toLowerCase().trim()]
+          );
+        } else {
+          res = await query(
+            `SELECT consensus_timestamp, sequence_number, hcs_topic_id, network 
+             FROM hedera_attestations 
+             WHERE hcs_topic_id = $1 AND sequence_number = $2`,
+            [topic!.trim(), Number(seq)]
+          );
+        }
+
+        if (res.rows.length === 0) {
+          const errCode = 404;
+          await query(
+            "INSERT INTO api_usage_logs (client_id, endpoint, response_code) VALUES ($1, $2, $3)",
+            [client.id, "/api/partner/verify", errCode]
+          );
+          await query(
+            `INSERT INTO audit_log (action, entity_type, metadata)
+             VALUES ($1, $2, $3)`,
+            [
+              "partner_verify_attestation_failed",
+              "hedera_attestations",
+              JSON.stringify({
+                clientId: client.id,
+                query: request.query
+              })
+            ]
+          );
+          return reply.status(errCode).send({
+            success: false,
+            error: {
+              code: "NOT_FOUND",
+              message: "Attestation record not found."
+            }
+          });
+        }
+
+        const attestation = res.rows[0];
+        const network = attestation.network || env.HEDERA_NETWORK || "testnet";
+        const hashscanBase = `https://hashscan.io/${network.toLowerCase()}`;
+
+        const responsePayload = {
+          success: true,
+          verified: true,
+          attestation: {
+            consensusTimestamp: attestation.consensus_timestamp,
+            sequenceNumber: Number(attestation.sequence_number),
+            network: attestation.network,
+            topicId: attestation.hcs_topic_id,
+            hashscanLink: `${hashscanBase}/topic/${attestation.hcs_topic_id}`
+          }
+        };
+
+        // Log to usage & audit tables
+        await query(
+          "INSERT INTO api_usage_logs (client_id, endpoint, response_code) VALUES ($1, $2, $3)",
+          [client.id, "/api/partner/verify", 200]
+        );
+        await query(
+          `INSERT INTO audit_log (action, entity_type, metadata)
+           VALUES ($1, $2, $3)`,
+          [
+            "partner_verify_attestation_success",
+            "hedera_attestations",
+            JSON.stringify({
+              clientId: client.id,
+              query: request.query,
+              attestationTopic: attestation.hcs_topic_id,
+              sequenceNumber: attestation.sequence_number
+            })
+          ]
+        );
+
+        return responsePayload;
+      } catch (err: any) {
+        console.error("Partner verification error:", err);
+        const errCode = 500;
+        await query(
+          "INSERT INTO api_usage_logs (client_id, endpoint, response_code) VALUES ($1, $2, $3)",
+          [client.id, "/api/partner/verify", errCode]
+        );
+        return reply.status(errCode).send({
+          success: false,
+          error: {
+            code: "SERVER_ERROR",
+            message: err.message || "An unexpected error occurred."
+          }
+        });
+      }
     }
   );
 }
