@@ -61,7 +61,7 @@ async function main() {
 
     // 2. Register CORS with whitelist
     await server.register(cors, {
-      origin: ["https://app.diraafrica.com", "http://localhost:3000"],
+      origin: ["https://app.diraafrica.org", "http://localhost:3000"],
       methods: ["GET", "POST", "PATCH", "DELETE"],
       allowedHeaders: ["Content-Type", "Authorization"],
       credentials: true,
