@@ -169,12 +169,17 @@ export class VoucherService {
       throw new Error("DEALER_MISMATCH");
     }
 
-    // 6. Mark status as 'redeemed', set scanned_at
+    // Fetch transaction fee pct
+    const dealerRes = await query("SELECT transaction_fee_pct FROM agro_dealers WHERE id = $1", [agroDealerId]);
+    const takeRate = dealerRes.rows.length > 0 ? (Number(dealerRes.rows[0].transaction_fee_pct) || 3.50) : 3.50;
+    const feeAmount = (Number(kesValue) * takeRate) / 100;
+
+    // 6. Mark status as 'redeemed', set scanned_at, take_rate, fee_amount
     await query(
       `UPDATE voucher_redemptions 
-       SET status = 'redeemed', scanned_at = CURRENT_TIMESTAMP 
+       SET status = 'redeemed', scanned_at = CURRENT_TIMESTAMP, take_rate = $2, fee_amount = $3
        WHERE voucher_code = $1`,
-      [voucherCode]
+      [voucherCode, takeRate, feeAmount]
     );
 
     return {
@@ -351,12 +356,19 @@ export class VoucherService {
       };
     }
 
+    // Fetch transaction fee pct
+    const dealerRes = await query("SELECT transaction_fee_pct FROM agro_dealers WHERE id = $1", [agroDealerId]);
+    const takeRate = dealerRes.rows.length > 0 ? (Number(dealerRes.rows[0].transaction_fee_pct) || 3.50) : 3.50;
+    const feeAmount = (Number(voucher.kes_value) * takeRate) / 100;
+
     await query(
       `UPDATE voucher_redemptions 
        SET status = 'scanned', 
-           scanned_at = CURRENT_TIMESTAMP 
+           scanned_at = CURRENT_TIMESTAMP,
+           take_rate = $2,
+           fee_amount = $3
        WHERE voucher_code = $1`,
-      [code]
+      [code, takeRate, feeAmount]
     );
 
     return { success: true };
