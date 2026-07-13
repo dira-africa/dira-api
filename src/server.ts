@@ -137,7 +137,7 @@ async function main() {
 
     // security.txt route
     server.get("/.well-known/security.txt", async (request, reply) => {
-      return reply.type("text/plain").send("Contact: security@diraafrica.com\n");
+      return reply.type("text/plain").send("Contact: security@diraafrica.org\n");
     });
 
     // Local static file serving fallback for uploads
