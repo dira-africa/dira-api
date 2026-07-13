@@ -37,7 +37,7 @@ mockDb.users.push({
   county: "Nairobi"
 });
 
-pool.query = async (text: string, params: any[]) => {
+(pool as any).query = async (text: any, params: any[] = []) => {
   const normalizedText = text.trim().replace(/\s+/g, " ");
 
   if (normalizedText.includes("SELECT 1")) {
@@ -165,7 +165,7 @@ pool.query = async (text: string, params: any[]) => {
   return { rows: [], rowCount: 0 };
 };
 
-pool.connect = async () => {
+(pool as any).connect = async () => {
   return {
     query: async (text: string, params: any[]) => {
       const normalizedText = text.trim().replace(/\s+/g, " ");
@@ -241,9 +241,6 @@ hashgraphSdk.TokenMintTransaction.prototype.execute = async function() {
     }
   } as any;
 };
-hashgraphSdk.TokenMintTransaction.prototype.getReceipt = async function() {
-  return {} as any;
-};
 hashgraphSdk.TokenBurnTransaction.prototype.execute = async function() {
   return {
     transactionId: {
@@ -253,9 +250,6 @@ hashgraphSdk.TokenBurnTransaction.prototype.execute = async function() {
       return {};
     }
   } as any;
-};
-hashgraphSdk.TokenBurnTransaction.prototype.getReceipt = async function() {
-  return {} as any;
 };
 
 // 3. Import rest of requirements

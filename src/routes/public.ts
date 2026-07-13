@@ -1,6 +1,7 @@
 import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { redis } from "../db/redis";
+import { env } from "../config/env";
 import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
@@ -8,6 +9,7 @@ import {
   hederaAnchorQueue
 } from "../jobs/queues";
 import { hederaMirrorIndexerService } from "../services/hederaMirrorIndexerService";
+import { metricsService } from "../services/metricsService";
 
 
 export default async function publicRoutes(fastify: FastifyInstance) {
@@ -82,6 +84,10 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           `SELECT COALESCE(SUM(amount_kes), 0) AS total_disbursed_kes FROM redemption_requests WHERE status = 'completed'`
         );
         const hederaCounters = await hederaMirrorIndexerService.getDashboardCounters();
+        const network = env.HEDERA_NETWORK || "testnet";
+        const topicId = env.DIRA_HCS_TOPIC_ID;
+        const tokenId = env.DIRA_HTS_TOKEN_ID;
+        const hashscanBase = `https://hashscan.io/${network}`;
 
         return {
           totalVerifiedDataPoints: Number(verifiedRes.rows[0]?.total_verified || 0),
@@ -89,7 +95,13 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           countiesCovered: Number(countiesRes.rows[0]?.counties_covered || 0),
           cropSubmissionsMonth: Number(cropsThisMonthRes.rows[0]?.crops_this_month || 0),
           tokensDisbursedKes: Number(disbursedRes.rows[0]?.total_disbursed_kes || 0),
-          hedera: hederaCounters
+          hedera: {
+            ...hederaCounters,
+            topicId,
+            tokenId,
+            topicLink: topicId ? `${hashscanBase}/topic/${topicId}` : null,
+            tokenLink: tokenId ? `${hashscanBase}/token/${tokenId}` : null
+          }
         };
       });
 
@@ -462,6 +474,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
           error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch payment status." }
         });
       }
+    }
+  );
+
+  // 5. GET /metrics - Prometheus metrics scraping endpoint
+  fastify.get(
+    "/metrics",
+    async (request, reply) => {
+      const text = await metricsService.getMetricsText();
+      return reply.type("text/plain; version=0.0.4; charset=utf-8").send(text);
     }
   );
 }

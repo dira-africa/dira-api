@@ -116,6 +116,14 @@ async function main() {
     // 7. Register Global Error Handler
     server.setErrorHandler(errorHandler);
 
+    // Register global metrics hook to count HTTP requests
+    server.addHook("onResponse", async (request, reply) => {
+      const route = request.routeOptions.url || request.url;
+      if (route === "/metrics" || route === "/api/metrics") return;
+      const { metricsService } = await import("./services/metricsService");
+      metricsService.incrementRequests(request.method, route, reply.statusCode);
+    });
+
     // 7. Register Routes
     await server.register(publicRoutes);
     await server.register(authRoutes, { prefix: "/api/auth" });
