@@ -119,8 +119,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
         // Upsert user in database
         const userSelect = await query(
-          `SELECT id, full_name, role, language FROM users WHERE telegram_id = $1`,
-          [telegramId]
+          `SELECT id, full_name, role, language, privacy_policy_accepted_at,
+                  CASE WHEN phone_number IS NOT NULL THEN pgp_sym_decrypt(phone_number::bytea, $2) ELSE NULL END AS decrypted_phone
+           FROM users WHERE telegram_id = $1`,
+          [telegramId, env.PGCRYPTO_SYMMETRIC_KEY]
         );
 
         let user;
@@ -128,6 +130,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
         if (userSelect.rows.length > 0) {
           user = userSelect.rows[0];
+          if (!user.privacy_policy_accepted_at || user.decrypted_phone === "PENDING" || !user.decrypted_phone) {
+            isNewUser = true;
+          }
           await query(
             `UPDATE users 
              SET telegram_username = $1, full_name = $2, last_seen_at = CURRENT_TIMESTAMP 
