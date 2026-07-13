@@ -15,9 +15,17 @@
  */
 
 import { hederaAnchorService } from "../services/hederaAnchorService";
+import { hederaMirrorIndexerService } from "../services/hederaMirrorIndexerService";
 import { Job } from "bullmq";
 
 export async function processHederaAnchor(job: Job) {
+  if (job.name === "hedera-mirror-indexing") {
+    console.log("Starting Hedera Mirror Node indexing/reconciliation job...");
+    const result = await hederaMirrorIndexerService.indexPendingEvents();
+    console.log("Completed Hedera Mirror Node indexing:", result);
+    return result;
+  }
+
   if (job.name === "anchor-submission") {
     const { submissionId } = job.data;
     console.log(`Starting Hedera anchoring for submission: ${submissionId}...`);

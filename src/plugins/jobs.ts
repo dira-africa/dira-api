@@ -73,6 +73,23 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       }
     );
 
+    // E. Hedera Mirror Node indexing repeatable job (runs every 5 minutes)
+    for (const rJob of hederaRepeatable) {
+      if (rJob.name === "hedera-mirror-indexing") {
+        await hederaAnchorQueue.removeRepeatableByKey(rJob.key);
+      }
+    }
+    await hederaAnchorQueue.add(
+      "hedera-mirror-indexing",
+      {},
+      {
+        repeat: {
+          pattern: "*/5 * * * *", // Every 5 minutes
+        },
+        jobId: "hedera-mirror-indexing-job"
+      }
+    );
+
     // Nightly DPA Compliance cleanup job (runs daily at 2am EAT)
     for (const rJob of hederaRepeatable) {
       if (rJob.name === "nightly-dpa-cleanup") {

@@ -7,6 +7,8 @@ import {
   notificationsQueue,
   hederaAnchorQueue
 } from "../jobs/queues";
+import { hederaMirrorIndexerService } from "../services/hederaMirrorIndexerService";
+
 
 export default async function publicRoutes(fastify: FastifyInstance) {
   // Caching helper
@@ -79,13 +81,15 @@ export default async function publicRoutes(fastify: FastifyInstance) {
         const disbursedRes = await query(
           `SELECT COALESCE(SUM(amount_kes), 0) AS total_disbursed_kes FROM redemption_requests WHERE status = 'completed'`
         );
+        const hederaCounters = await hederaMirrorIndexerService.getDashboardCounters();
 
         return {
           totalVerifiedDataPoints: Number(verifiedRes.rows[0]?.total_verified || 0),
           activeUsers7Days: Number(activeUsersRes.rows[0]?.active_users || 0),
           countiesCovered: Number(countiesRes.rows[0]?.counties_covered || 0),
           cropSubmissionsMonth: Number(cropsThisMonthRes.rows[0]?.crops_this_month || 0),
-          tokensDisbursedKes: Number(disbursedRes.rows[0]?.total_disbursed_kes || 0)
+          tokensDisbursedKes: Number(disbursedRes.rows[0]?.total_disbursed_kes || 0),
+          hedera: hederaCounters
         };
       });
 
