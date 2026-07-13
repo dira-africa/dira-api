@@ -18,7 +18,7 @@ import { Job } from "bullmq";
 import { query } from "../db/query";
 import { aiService } from "../services/aiService";
 import { tokenService } from "../services/tokenService";
-import { notificationsQueue } from "./queues";
+import { notificationsQueue, hederaAnchorQueue } from "./queues";
 import path from "path";
 import fs from "fs";
 
@@ -90,6 +90,14 @@ export async function processPhotoVerification(job: Job) {
       "crop_photo",
       submissionId
     );
+
+    // Queue anchoring to Hedera HCS Topic
+    try {
+      await hederaAnchorQueue.add("anchor-submission", { submissionId });
+      console.log(`Queued Hedera anchoring job for submission ${submissionId}`);
+    } catch (queueErr: any) {
+      console.error(`Failed to queue Hedera anchoring job for submission ${submissionId}:`, queueErr.message);
+    }
 
     // Fetch user details for Telegram notification
     const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);

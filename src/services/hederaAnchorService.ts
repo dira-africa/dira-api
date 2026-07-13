@@ -17,8 +17,97 @@
 import { query } from "../db/query";
 import { createHash } from "crypto";
 import { env } from "../config/env";
+import { TopicMessageSubmitTransaction } from "@hashgraph/sdk";
+import { hederaService } from "./hederaService";
 
 export class HederaAnchorService {
+  /**
+   * Anchors a single verified crop submission.
+   * Deterministically hashes the metadata and submits only the SHA-256 hash to Hedera HCS.
+   */
+  async anchor(submissionId: string): Promise<{
+    success: boolean;
+    sha256: string;
+    hcsTxId: string;
+    consensusTimestamp: string;
+    sequenceNumber: number;
+  }> {
+    const res = await query(
+      `SELECT id, user_id, farm_id, photo_url, crop_type, growth_stage,
+              ai_health_score, ai_detected_issues, ai_confidence, submitted_at,
+              ST_X(location::geometry) as longitude, ST_Y(location::geometry) as latitude
+       FROM crop_submissions
+       WHERE id = $1`,
+      [submissionId]
+    );
+
+    if (res.rows.length === 0) {
+      throw new Error(`Crop submission with ID ${submissionId} not found.`);
+    }
+
+    const row = res.rows[0];
+    const payload = {
+      id: row.id,
+      userId: row.user_id,
+      farmId: row.farm_id,
+      cropType: row.crop_type,
+      growthStage: row.growth_stage,
+      aiHealthScore: parseFloat(row.ai_health_score),
+      aiConfidence: parseFloat(row.ai_confidence),
+      aiDetectedIssues: row.ai_detected_issues,
+      latitude: parseFloat(row.latitude),
+      longitude: parseFloat(row.longitude),
+      submittedAt: new Date(row.submitted_at).toISOString()
+    };
+
+    // Deterministic payload canonicalization and hashing
+    const canonicalPayload = JSON.stringify(payload, Object.keys(payload).sort());
+    const sha256 = createHash("sha256").update(canonicalPayload).digest("hex");
+
+    const client = await hederaService.getClient(false);
+    const network = env.HEDERA_NETWORK || "testnet";
+    const topicId = env.DIRA_HCS_TOPIC_ID;
+
+    if (!topicId || topicId === "0.0.12345") {
+      throw new Error("Missing or invalid DIRA_HCS_TOPIC_ID in configuration.");
+    }
+
+    console.log(`Submitting attestation hash for crop submission ${submissionId} to HCS topic ${topicId}...`);
+
+    const tx = new TopicMessageSubmitTransaction()
+      .setTopicId(topicId)
+      .setMessage(JSON.stringify({
+        type: "crop_submission",
+        submissionId: row.id,
+        sha256
+      }));
+
+    const txResponse = await tx.execute(client);
+    const record = await txResponse.getRecord(client);
+    const receipt = record.receipt;
+    const consensusTimestamp = record.consensusTimestamp
+      ? record.consensusTimestamp.toDate().toISOString()
+      : new Date().toISOString();
+    const sequenceNumber = receipt.topicSequenceNumber ? receipt.topicSequenceNumber.toNumber() : 0;
+    const hcsTxId = txResponse.transactionId.toString();
+
+    await query(
+      `INSERT INTO hedera_attestations (submission_id, sha256, hcs_topic_id, consensus_timestamp, sequence_number, network)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [row.id, sha256, topicId, consensusTimestamp, sequenceNumber, network]
+    );
+
+    console.log(`Successfully anchored crop submission ${submissionId} on Hedera (HCS Tx ID: ${hcsTxId})`);
+
+    return {
+      success: true,
+      sha256,
+      hcsTxId,
+      consensusTimestamp,
+      sequenceNumber
+    };
+  }
+
   /**
    * Computes the Merkle Root of a list of UUID strings.
    * IDs are sorted alphabetically to ensure deterministic hash trees.
@@ -120,12 +209,32 @@ export class HederaAnchorService {
     const ids = res.rows.map(row => row.id as string);
     const batchHash = this.computeMerkleRoot(ids);
 
-    // Stub anchoring values (Hedera integration pending)
-    const hcsTxId = null;
-    const hcsSequenceNumber = null;
+    const client = await hederaService.getClient(false);
+    const network = env.HEDERA_NETWORK || "testnet";
+    const topicId = env.DIRA_HCS_TOPIC_ID;
+
+    if (!topicId || topicId === "0.0.12345") {
+      throw new Error("Missing or invalid DIRA_HCS_TOPIC_ID in configuration.");
+    }
+
+    console.log(`Submitting weekly batch anchor to HCS topic ${topicId} for week ${weekNumber}...`);
+
+    const tx = new TopicMessageSubmitTransaction()
+      .setTopicId(topicId)
+      .setMessage(JSON.stringify({
+        type: "weekly_batch",
+        weekNumber,
+        batchHash,
+        dataPointCount
+      }));
+
+    const txResponse = await tx.execute(client);
+    const receipt = await txResponse.getReceipt(client);
+    const hcsTxId = txResponse.transactionId.toString();
+    const hcsSequenceNumber = receipt.topicSequenceNumber ? receipt.topicSequenceNumber.toString() : "0";
     const htsTxId = null;
 
-    console.log(`Hedera anchoring pending for week ${weekNumber} with batch root ${batchHash}`);
+    console.log(`Hedera weekly anchoring successful for week ${weekNumber} with batch root ${batchHash}`);
 
     await query(
       `INSERT INTO hedera_anchors (week_number, batch_hash, data_point_count, hcs_tx_id, hcs_sequence_number, hts_tx_id, anchored_at)
@@ -142,10 +251,10 @@ export class HederaAnchorService {
 
     return {
       anchored: true,
-      hcsTxId: hcsTxId || undefined,
+      hcsTxId,
       batchHash,
       dataPointCount,
-      hcsSequenceNumber: hcsSequenceNumber || undefined,
+      hcsSequenceNumber,
       htsTxId: htsTxId || undefined,
     };
   }
@@ -230,11 +339,36 @@ export class HederaAnchorService {
     // Cryptographic Certificate ID: SHA-256 of parameters
     const certPayload = `${countyCode}_${startStr}_${endStr}_${conditionType}_${confidenceThreshold.toFixed(3)}`;
     const certId = createHash("sha256").update(certPayload).digest("hex");
-    
-    // Stub anchoring values (Hedera integration pending)
-    const hcsTxId = null;
-    const hcsSequenceNumber = null;
+
+    const client = await hederaService.getClient(false);
+    const network = env.HEDERA_NETWORK || "testnet";
+    const topicId = env.DIRA_HCS_TOPIC_ID;
+
+    if (!topicId || topicId === "0.0.12345") {
+      throw new Error("Missing or invalid DIRA_HCS_TOPIC_ID in configuration.");
+    }
+
+    console.log(`Submitting certificate registration to HCS topic ${topicId} for certificate ${certId}...`);
+
+    const tx = new TopicMessageSubmitTransaction()
+      .setTopicId(topicId)
+      .setMessage(JSON.stringify({
+        type: "data_certificate",
+        certId,
+        countyCode,
+        periodStart: startStr,
+        periodEnd: endStr,
+        conditionType,
+        confidenceThreshold
+      }));
+
+    const txResponse = await tx.execute(client);
+    const receipt = await txResponse.getReceipt(client);
+    const hcsTxId = txResponse.transactionId.toString();
+    const hcsSequenceNumber = receipt.topicSequenceNumber ? receipt.topicSequenceNumber.toString() : "0";
     const htsTxId = null;
+
+    console.log(`Successfully registered certificate ${certId} on Hedera`);
 
     await query(
       `INSERT INTO hedera_certificates (
@@ -251,8 +385,8 @@ export class HederaAnchorService {
     return {
       success: true,
       certId,
-      hcsTxId: hcsTxId || undefined,
-      hcsSequenceNumber: hcsSequenceNumber || undefined,
+      hcsTxId,
+      hcsSequenceNumber,
       htsTxId: htsTxId || undefined,
     };
   }

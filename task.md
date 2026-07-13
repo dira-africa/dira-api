@@ -1,0 +1,18 @@
+# Tasks: Hedera Integration (P1.1 - P1.5)
+
+## Implementation
+- [x] Add `@hashgraph/sdk` to `package.json` dependencies (P1.1)
+- [x] Implement `src/services/hederaService.ts` with `getClient()` and `allowMainnet` guard (P1.1)
+- [x] Create connection check script `src/scripts/check-hedera.ts` (P1.1)
+- [x] Run balance check script and verify testnet connectivity (P1.1)
+- [x] Fix operator signature mismatch by adding HEDERA_OPERATOR_KEY_TYPE support and mirror-node auto-detection (P1.2)
+- [x] Create HCS Topic setup script `src/scripts/create-hedera-topic.ts` (P1.2)
+- [x] Run topic creation script and register `0.0.9544926` in `.env` (P1.2)
+- [x] Create HTS Token setup script `src/scripts/create-hedera-token.ts` (P1.3)
+- [x] Run token creation script and register `0.0.9544938` in `.env` (P1.3)
+- [x] Implement individual, weekly batch, and certificate anchoring in `src/services/hederaAnchorService.ts` (P1.4)
+- [x] Update BullMQ workers and queues to automatically queue individual crop submissions for anchoring (P1.4)
+- [x] Verify that code compiles with zero errors (P1.4)
+- [x] Create database migration `020_add_token_hts_tx_id.sql` (P1.5)
+- [x] Implement HTS token minting on credits and token burning on deductions in `tokenService.ts` (P1.5)
+- [x] Ensure HTS errors rollback the database transaction to prevent ledger/chain desync (P1.5)

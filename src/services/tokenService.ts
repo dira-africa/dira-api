@@ -16,6 +16,9 @@
 
 import { query } from "../db/query";
 import { pool } from "../db/pool";
+import { TokenMintTransaction, TokenBurnTransaction } from "@hashgraph/sdk";
+import { hederaService } from "./hederaService";
+import { env } from "../config/env";
 
 export type TransactionType =
   | "atmospheric_sync"
@@ -91,18 +94,39 @@ export async function deductTokens(
 
     const newBalance = balance - amount;
 
+    // HTS Burn Transaction mirroring redemption
+    let htsTxId: string | null = null;
+    const tokenId = env.DIRA_HTS_TOKEN_ID;
+    if (!tokenId || tokenId === "0.0.12345") {
+      throw new Error("Missing or invalid DIRA_HTS_TOKEN_ID in configuration.");
+    }
+
+    console.log(`Executing HTS Token Burn: Burning ${amount} tokens (${amount * 100} units) from treasury for user ${userId}...`);
+    try {
+      const htsClient = await hederaService.getClient(false);
+      const burnTx = new TokenBurnTransaction()
+        .setTokenId(tokenId)
+        .setAmount(amount * 100);
+
+      const response = await burnTx.execute(htsClient);
+      await response.getReceipt(htsClient);
+      htsTxId = response.transactionId.toString();
+    } catch (htsErr: any) {
+      throw new Error(`Hedera HTS Burn failed: ${htsErr.message}`);
+    }
+
     // 3. Insert transaction into token_transactions
     await client.query(
-      `INSERT INTO token_transactions (user_id, amount, type, reference_id, status)
-       VALUES ($1, $2, $3, $4, 'confirmed')`,
-      [userId, amount, type, referenceId || null]
+      `INSERT INTO token_transactions (user_id, amount, type, reference_id, status, hts_tx_id)
+       VALUES ($1, $2, $3, $4, 'confirmed', $5)`,
+      [userId, amount, type, referenceId || null, htsTxId]
     );
 
     // 4. Dual-write negative entry to legacy token_ledger for compatibility
     await client.query(
-      `INSERT INTO token_ledger (user_id, amount, balance_after, transaction_type, reference_id, notes)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [userId, -amount, newBalance, type, referenceId || null, `Redeemed ${amount} tokens`]
+      `INSERT INTO token_ledger (user_id, amount, balance_after, transaction_type, reference_id, notes, hts_tx_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [userId, -amount, newBalance, type, referenceId || null, `Redeemed ${amount} tokens`, htsTxId]
     );
 
     await client.query("COMMIT");
@@ -165,18 +189,39 @@ export class TokenService {
       const currentBalance = parseFloat(balanceRes.rows[0].balance);
       const newBalance = currentBalance + amount;
 
+      // HTS Mint Transaction mirroring reward earning
+      let htsTxId: string | null = null;
+      const tokenId = env.DIRA_HTS_TOKEN_ID;
+      if (!tokenId || tokenId === "0.0.12345") {
+        throw new Error("Missing or invalid DIRA_HTS_TOKEN_ID in configuration.");
+      }
+
+      console.log(`Executing HTS Token Mint: Minting ${amount} tokens (${amount * 100} units) to treasury for user ${userId}...`);
+      try {
+        const htsClient = await hederaService.getClient(false);
+        const mintTx = new TokenMintTransaction()
+          .setTokenId(tokenId)
+          .setAmount(amount * 100);
+
+        const response = await mintTx.execute(htsClient);
+        await response.getReceipt(htsClient);
+        htsTxId = response.transactionId.toString();
+      } catch (htsErr: any) {
+        throw new Error(`Hedera HTS Mint failed: ${htsErr.message}`);
+      }
+
       // 3. Insert transaction into token_transactions
       await client.query(
-        `INSERT INTO token_transactions (user_id, amount, type, reference_id, status)
-         VALUES ($1, $2, 'earn', $3, 'confirmed')`,
-        [userId, amount, referenceId || null]
+        `INSERT INTO token_transactions (user_id, amount, type, reference_id, status, hts_tx_id)
+         VALUES ($1, $2, 'earn', $3, 'confirmed', $4)`,
+        [userId, amount, referenceId || null, htsTxId]
       );
 
       // 4. Insert positive ledger entry into legacy token_ledger
       await client.query(
-        `INSERT INTO token_ledger (user_id, amount, balance_after, transaction_type, reference_id, notes)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [userId, amount, newBalance, type, referenceId || null, notes || null]
+        `INSERT INTO token_ledger (user_id, amount, balance_after, transaction_type, reference_id, notes, hts_tx_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [userId, amount, newBalance, type, referenceId || null, notes || null, htsTxId]
       );
 
       await client.query("COMMIT");

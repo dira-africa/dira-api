@@ -311,4 +311,65 @@ export default async function cropSubmissionsRoutes(fastify: FastifyInstance) {
       }
     }
   );
+
+  // 5. GET /api/crop-submissions/:id/receipt - Retrieve the public Hedera verification receipt (no PII)
+  fastify.get<{ Params: { id: string } }>(
+    "/:id/receipt",
+    async (request, reply) => {
+      const { id } = request.params;
+      try {
+        const attRes = await query(
+          `SELECT submission_id, sha256, hcs_topic_id, consensus_timestamp, sequence_number, network
+           FROM hedera_attestations
+           WHERE submission_id = $1`,
+          [id]
+        );
+
+        if (attRes.rows.length === 0) {
+          // Check if submission exists but is not yet anchored / pending
+          const subRes = await query(
+            "SELECT verification_status, rejection_reason FROM crop_submissions WHERE id = $1",
+            [id]
+          );
+
+          if (subRes.rows.length === 0) {
+            return reply.status(404).send({
+              success: false,
+              error: { code: "NOT_FOUND", message: "Crop submission not found." }
+            });
+          }
+
+          const sub = subRes.rows[0];
+          return {
+            success: true,
+            status: sub.verification_status,
+            rejectionReason: sub.rejection_reason || null,
+            message: "Submission is verified but anchoring is pending, or it was rejected."
+          };
+        }
+
+        const row = attRes.rows[0];
+        const networkStr = row.network === "mainnet" ? "mainnet" : "testnet";
+        const hashscanUrl = `https://hashscan.io/${networkStr}/topic/${row.hcs_topic_id}`;
+
+        return {
+          success: true,
+          receipt: {
+            submissionId: row.submission_id,
+            sha256: row.sha256,
+            hcsTopicId: row.hcs_topic_id,
+            consensusTimestamp: row.consensus_timestamp,
+            sequenceNumber: row.sequence_number,
+            network: row.network,
+            hashscanUrl
+          }
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch receipt." }
+        });
+      }
+    }
+  );
 }

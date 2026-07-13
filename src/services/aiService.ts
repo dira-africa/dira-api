@@ -17,6 +17,8 @@
 import fs from "fs";
 import sharp from "sharp";
 import { query } from "../db/query";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { env } from "../config/env";
 
 export interface VerificationResult {
   isVerified: boolean;
@@ -29,51 +31,16 @@ export interface VerificationResult {
   reason?: string;
 }
 
-// Swahili agricultural terms dictionary
-const AGRI_DICT: Record<string, string> = {
-  // Headings
-  "Observation": "Uchunguzi",
-  "Interpretation": "Tafsiri",
-  "Recommended Actions": "Hatua Zinazopendekezwa",
-
-  // Observations
-  "Healthy crop foliage detected with active growth.": "Majani ya zao yenye afya yamegunduliwa yakiwa na ukuaji dhabiti.",
-  "Foliage shows signs of significant yellowing.": "Majani yanaonyesha dalili za njano kupita kiasi.",
-  "Foliage shows necrotic spots or browning.": "Majani yanaonyesha madoa ya seli zilizokufa au rangi ya kahawia.",
-  "Foliage exhibits yellowing and browning simultaneously.": "Majani yanaonyesha dalili za njano na kahawia kwa wakati mmoja.",
-
-  // Interpretations
-  "Chlorophyll levels are optimal, confirming healthy photosynthesis.": "Kiwango cha klorofili ni kizuri, kikithibitisha usimbaji hewa wenye afya.",
-  "Yellowing indicates potential nitrogen deficiency or drought stress.": "Ujano unaonyesha uwezekano wa upungufu wa nitrojeni au ukame.",
-  "Browning suggests pest damage or fungal disease infection.": "Rangi ya kahawia inaashiria uharibifu wa wadudu au maambukizi ya fangasi.",
-  "Combined symptoms suggest multi-stress conditions (disease and nutrient deficiency).": "Dalili mchanganyiko zinaashiria changamoto nyingi kwa wakati mmoja (ugonjwa na upungufu wa virutubisho).",
-
-  // Recommendations
-  "Continue standard weeding and irrigation schedules.": "Endelea na ratiba ya kawaida ya kupalilia na kumwagilia maji.",
-  "Monitor crop health weekly for any early pest indicators.": "Chunguza afya ya zao kila wiki ili kugundua wadudu mapema.",
-  "Maintain farm hygiene and soil nutrition levels.": "Weka shamba katika hali ya usafi na udumishe rutuba ya udongo.",
-  "Apply nitrogen-rich fertilizer (e.g. CAN or Urea) to boost growth.": "Weka mbolea yenye nitrojeni kwa wingi (k.m. CAN au Urea) ili kukuza zao.",
-  "Increase watering frequency to mitigate drought stress.": "Ongeza ratiba ya kumwagilia maji ili kukabiliana na ukame.",
-  "Perform soil test to check pH and nutrient availability.": "Pima udongo ili kujua kiwango cha tindikali na virutubisho vilivyopo.",
-  "Spray appropriate organic or recommended chemical pesticides.": "Nyunyizia dawa inayofaa ya kikaboni au ya kemikali dhidi ya wadudu.",
-  "Prune and burn heavily infected leaves to halt disease spread.": "Kata na uchome moto majani yaliyoathirika sana ili kuzuia kuenea kwa ugonjwa.",
-  "Improve air circulation by proper spacing and weeding.": "Imarisha mzunguko wa hewa kwa nafasi sahihi ya mimea na kupalilia.",
-  "Consult your local agricultural extension officer for diagnostic support.": "Wasiliana na afisa wa ugani wa kilimo wa eneo lako kwa usaidizi.",
-  "Implement integrated pest and disease management protocols.": "Tekeleza mbinu jumuishi za kudhibiti wadudu na magonjwa.",
-  "Apply broad-spectrum fungicide if fungal infection is active.": "Weka dawa ya kuua fangasi ya wigo mpana ikiwa fangasi wapo hai."
-};
-
-const translate = (text: string): string => {
-  const cleanText = text.replace(/^\d+\.\s+/, "").replace(/^-\s+/, "").trim();
-  const translated = AGRI_DICT[cleanText] || cleanText;
-  if (text.startsWith("1.")) return `1. ${translated}`;
-  if (text.startsWith("2.")) return `2. ${translated}`;
-  if (text.startsWith("3.")) return `3. ${translated}`;
-  if (text.startsWith("- ")) return `- ${translated}`;
-  return translated;
-};
-
 export class AiService {
+  private genAI: GoogleGenerativeAI | null = null;
+
+  constructor() {
+    const apiKey = env.GEMINI_API_KEY;
+    if (apiKey && apiKey !== "placeholder" && !apiKey.includes("placeholder")) {
+      this.genAI = new GoogleGenerativeAI(apiKey);
+    }
+  }
+
   /**
    * Helper: Calculate Haversine distance in km
    */
@@ -90,96 +57,7 @@ export class AiService {
   }
 
   /**
-   * Call PlantNet API (or mock) to identify plant species.
-   */
-  async identifyPlantFromBuffer(
-    buffer: Buffer,
-    cropType: string
-  ): Promise<{ isMatched: boolean; species: string; confidence: number }> {
-    const apiKey = process.env.PLANTNET_API_KEY;
-
-    if (!apiKey || apiKey === "placeholder" || apiKey.includes("placeholder")) {
-      return this.mockPlantNet(cropType);
-    }
-
-    try {
-      const blob = new Blob([buffer as any], { type: "image/jpeg" });
-      const formData = new FormData();
-      formData.append("organs", "leaf");
-      formData.append("images", blob, "crop.jpg");
-
-      const res = await fetch(`https://my-api.plantnet.org/v2/identify/all?api-key=${apiKey}`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        throw new Error(`PlantNet HTTP error: ${res.status}`);
-      }
-
-      const data = await res.json();
-      const results = data.results || [];
-
-      if (results.length === 0) {
-        return { isMatched: false, species: "Unknown", confidence: 0 };
-      }
-
-      for (const result of results.slice(0, 3)) {
-        const speciesName = result.species?.scientificNameWithoutAuthor || "";
-        const score = result.score || 0;
-
-        if (this.matchesCropType(speciesName, cropType)) {
-          return { isMatched: true, species: speciesName, confidence: score };
-        }
-      }
-
-      const primarySpecies = results[0].species?.scientificNameWithoutAuthor || "Unknown";
-      const primaryScore = results[0].score || 0;
-      return { isMatched: false, species: primarySpecies, confidence: primaryScore };
-    } catch (err) {
-      console.error("PlantNet API request failed, falling back to mock:", err);
-      return this.mockPlantNet(cropType);
-    }
-  }
-
-  private matchesCropType(scientificName: string, cropType: string): boolean {
-    const name = scientificName.toLowerCase();
-    const type = cropType.toLowerCase();
-
-    if (type === "maize" && name.includes("zea mays")) return true;
-    if (type === "beans" && (name.includes("phaseolus") || name.includes("vicia") || name.includes("vigna"))) return true;
-    if (type === "wheat" && name.includes("triticum")) return true;
-    if (type === "tea" && name.includes("camellia sinensis")) return true;
-    if (type === "coffee" && name.includes("coffea")) return true;
-    if (type === "vegetables") {
-      const commonVeg = ["brassica", "solanum", "allium", "spinacia", "lactuca", "capsicum", "lycopersicon", "daucus"];
-      return commonVeg.some(veg => name.includes(veg));
-    }
-    if (type === "other") return true;
-
-    return false;
-  }
-
-  private mockPlantNet(cropType: string): { isMatched: boolean; species: string; confidence: number } {
-    const speciesMap: Record<string, string> = {
-      Maize: "Zea mays",
-      Beans: "Phaseolus vulgaris",
-      Wheat: "Triticum aestivum",
-      Tea: "Camellia sinensis",
-      Coffee: "Coffea arabica",
-      Vegetables: "Solanum lycopersicum",
-      Other: "Ageratum conyzoides",
-    };
-
-    return {
-      isMatched: true,
-      species: speciesMap[cropType] || "Zea mays",
-      confidence: 0.915,
-    };
-  }
-
-  /**
-   * Main AI pipeline execution
+   * Main AI pipeline execution using Gemini
    */
   async verifyCropPhoto(
     photoUrlOrPath: string,
@@ -215,7 +93,22 @@ export class AiService {
       };
     }
 
-    // 2. Authenticity checks - Image Size
+    // 2. Validate and limit uploaded image size (10MB limit)
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    if (imageBuffer.length > MAX_SIZE) {
+      return {
+        isVerified: false,
+        confidence: 0,
+        healthScore: 0,
+        detectedIssues: { image_too_large: true },
+        reportEn: "Image is too large. Maximum size allowed is 10MB.",
+        reportSw: "Picha ni kubwa mno. Kiwango cha juu cha ukubwa ni 10MB.",
+        identifiedSpecies: "None",
+        reason: "IMAGE_TOO_LARGE"
+      };
+    }
+
+    // 3. Authenticity checks - Image Size
     let metadata: sharp.Metadata;
     try {
       metadata = await sharp(imageBuffer).metadata();
@@ -247,7 +140,7 @@ export class AiService {
       };
     }
 
-    // 3. Authenticity checks - Solid color variance
+    // 4. Authenticity checks - Solid color variance
     try {
       const stats = await sharp(imageBuffer)
         .resize(20, 20)
@@ -285,7 +178,7 @@ export class AiService {
       console.error("Solid color check failed:", err);
     }
 
-    // 4. Authenticity checks - Laplacian Blur variance
+    // 5. Authenticity checks - Laplacian Blur variance
     try {
       const laplacianKernel = {
         width: 3,
@@ -329,7 +222,7 @@ export class AiService {
       console.error("Blur check failed:", err);
     }
 
-    // 5. Authenticity checks - Time check (EXIF data)
+    // 6. Authenticity checks - Time check (EXIF data)
     let isTimeValid = true;
     if (metadata.exif) {
       try {
@@ -361,7 +254,7 @@ export class AiService {
       };
     }
 
-    // 6. Geo-consistency check (Flag geo_anomaly if distance > 10km)
+    // 7. Geo-consistency check (Flag geo_anomaly if distance > 10km)
     let geoAnomaly = false;
     if (farmId && latitude !== undefined && longitude !== undefined) {
       try {
@@ -383,120 +276,111 @@ export class AiService {
       }
     }
 
-    // 7. Plant Detection
-    const idResult = await this.identifyPlantFromBuffer(imageBuffer, cropType);
-
-    // Mismatch flag (do not reject mix crop farming)
-    const speciesMismatch = !idResult.isMatched;
-
-    // 8. Health Assessment (colour ratio calculations)
-    let colorGrid: Buffer;
-    try {
-      colorGrid = await sharp(imageBuffer)
-        .resize(100, 100)
-        .raw()
-        .toBuffer();
-    } catch (err: any) {
-      colorGrid = Buffer.alloc(30000); // safety fallback
-    }
-
-    let greenCount = 0;
-    let yellowCount = 0;
-    let brownCount = 0;
-    const pixelCount = colorGrid.length / 3;
-
-    for (let i = 0; i < colorGrid.length; i += 3) {
-      const r = colorGrid[i];
-      const g = colorGrid[i + 1];
-      const b = colorGrid[i + 2];
-
-      if (g > r * 1.05 && g > b * 1.05 && g > 40) {
-        greenCount++;
-      } else if (r > 100 && g > 100 && b < 120 && Math.abs(r - g) < 30 && r > b * 1.3) {
-        yellowCount++;
-      } else if (r > 50 && r < 180 && g > 30 && g < 150 && b < 100 && r > g * 1.1) {
-        brownCount++;
-      }
-    }
-
-    const greenRatio = greenCount / pixelCount;
-    const yellowRatio = yellowCount / pixelCount;
-    const brownRatio = brownCount / pixelCount;
-
-    // Reject if image has less than 8% green pixels (non-foliage filter)
-    if (greenRatio < 0.08) {
+    // 8. Call Google Gemini Vision model
+    if (!this.genAI) {
+      // If API key is not configured, fallback/mock for local offline development
+      console.warn("⚠️ Google GenAI is not initialized (GEMINI_API_KEY missing). Falling back to development mock.");
       return {
-        isVerified: false,
-        confidence: idResult.confidence,
-        healthScore: greenRatio,
-        detectedIssues: { no_vegetation: true },
-        reportEn: "Low greenness detected. The image does not contain healthy crop foliage or vegetation. Make sure you are taking a photo of a live crop.",
-        reportSw: "Kiwango cha kijani kibichi ni cha chini mno. Picha haionyeshi majani yenye afya ya mmea. Hakikisha unapiga picha ya mmea ulio hai.",
-        identifiedSpecies: idResult.species,
-        reason: "LOW_GREENNESS_REJECTED"
+        isVerified: true,
+        confidence: 0.915,
+        healthScore: 0.85,
+        detectedIssues: geoAnomaly ? { geo_anomaly: true } : {},
+        reportEn: `Observation: Healthy crop foliage detected.\nInterpretation: Good active growth.\nRecommended Actions:\n- 1. Continue standard weeding.\n- 2. Monitor weekly.\n- 3. Maintain soil nutrition.`,
+        reportSw: `Uchunguzi: Majani ya zao yenye afya yamegunduliwa.\nTafsiri: Ukuaji dhabiti wenye afya.\nHatua Zinazopendekezwa:\n- 1. Endelea kupalilia shamba.\n- 2. Chunguza afya kila wiki.\n- 3. Dumisha rutuba ya udongo.`,
+        identifiedSpecies: cropType === "Maize" ? "Zea mays" : "Phaseolus vulgaris"
       };
     }
 
-    const drought_stress = Number(Math.min(1.0, yellowRatio * 3).toFixed(3));
-    const nutrient_deficiency = Number(Math.min(1.0, yellowRatio * 2).toFixed(3));
-    const pest_damage = Number(Math.min(1.0, brownRatio * 2).toFixed(3));
-    const disease = Number(Math.min(1.0, brownRatio * 2.5).toFixed(3));
-    const flood_damage = Number(Math.min(1.0, (yellowRatio + brownRatio) * 0.5).toFixed(3));
+    let responseText = "";
+    try {
+      const model = this.genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+      const prompt = `
+You are an expert agricultural AI assistant. Your task is to analyze the provided photo of a crop field.
+The farmer claims this is a photo of the crop type: "${cropType}".
 
-    const issues: Record<string, any> = {
-      drought_stress,
-      pest_damage,
-      disease,
-      nutrient_deficiency,
-      flood_damage
-    };
+You must evaluate and return a JSON object with the following fields:
+1. "isVerified": boolean. Set to true if and only if the image is a clear, real, and genuine photo of a crop field containing the expected crop type: "${cropType}". If the image is a stock photo, a screenshot, a non-crop object, or a mismatching plant, set to false.
+2. "confidence": number between 0.0 and 1.0 representing your confidence in the crop classification.
+3. "healthScore": number between 0.0 and 1.0 representing the general health of the crops (1.0 is perfectly healthy, 0.0 is dead or severely diseased).
+4. "detectedIssues": an object mapping the severity (number between 0.0 and 1.0) of agricultural stress factors:
+   - "drought_stress": severity number (0.0 to 1.0)
+   - "pest_damage": severity number (0.0 to 1.0)
+   - "disease": severity number (0.0 to 1.0)
+   - "nutrient_deficiency": severity number (0.0 to 1.0)
+   - "flood_damage": severity number (0.0 to 1.0)
+   - "species_mismatch": boolean (true if the identified species does not match the claimed crop type: "${cropType}")
+5. "identifiedSpecies": string (scientific name or common name of the primary crop identified)
+6. "reportEn": string. A brief, professional summary report in English. It MUST follow this exact structure:
+   "Observation: <what you observe in the image>
+   Interpretation: <what it indicates regarding health and stress>
+   Recommended Actions:
+   - 1. <first recommendation>
+   - 2. <second recommendation>
+   - 3. <third recommendation>"
+7. "reportSw": string. The exact same report translated accurately and professionally into Swahili. It MUST follow this exact structure:
+   "Uchunguzi: <Swahili translation of observation>
+   Tafsiri: <Swahili translation of interpretation>
+   Hatua Zinazopendekezwa:
+   - 1. <first Swahili recommendation>
+   - 2. <second Swahili recommendation>
+   - 3. <third Swahili recommendation>"
 
-    if (geoAnomaly) issues.geo_anomaly = true;
-    if (speciesMismatch) issues.species_mismatch = true;
+Output only the JSON object, do not include any markdown styling, code blocks, or extra text.
+`;
 
-    // Deduct from initial perfect 1.0 health score based on symptoms
-    const deductions = drought_stress * 0.4 + nutrient_deficiency * 0.2 + pest_damage * 0.2 + disease * 0.2;
-    const healthScore = Number(Math.max(0.0, Math.min(1.0, 1.0 - deductions)).toFixed(3));
+      const result = await model.generateContent({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  data: imageBuffer.toString("base64"),
+                  mimeType: "image/jpeg"
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      });
 
-    // 9. Report templates selector
-    let observation = "Healthy crop foliage detected with active growth.";
-    let interpretation = "Chlorophyll levels are optimal, confirming healthy photosynthesis.";
-    let rec1 = "1. Continue standard weeding and irrigation schedules.";
-    let rec2 = "2. Monitor crop health weekly for any early pest indicators.";
-    let rec3 = "3. Maintain farm hygiene and soil nutrition levels.";
+      responseText = result.response.text();
+      const verificationData = JSON.parse(responseText.trim());
 
-    if (yellowRatio > 0.1 && brownRatio > 0.1) {
-      observation = "Foliage exhibits yellowing and browning simultaneously.";
-      interpretation = "Combined symptoms suggest multi-stress conditions (disease and nutrient deficiency).";
-      rec1 = "1. Consult your local agricultural extension officer for diagnostic support.";
-      rec2 = "2. Implement integrated pest and disease management protocols.";
-      rec3 = "3. Apply broad-spectrum fungicide if fungal infection is active.";
-    } else if (yellowRatio > 0.1) {
-      observation = "Foliage shows signs of significant yellowing.";
-      interpretation = "Yellowing indicates potential nitrogen deficiency or drought stress.";
-      rec1 = "1. Apply nitrogen-rich fertilizer (e.g. CAN or Urea) to boost growth.";
-      rec2 = "2. Increase watering frequency to mitigate drought stress.";
-      rec3 = "3. Perform soil test to check pH and nutrient availability.";
-    } else if (brownRatio > 0.1) {
-      observation = "Foliage shows necrotic spots or browning.";
-      interpretation = "Browning suggests pest damage or fungal disease infection.";
-      rec1 = "1. Spray appropriate organic or recommended chemical pesticides.";
-      rec2 = "2. Prune and burn heavily infected leaves to halt disease spread.";
-      rec3 = "3. Improve air circulation by proper spacing and weeding.";
+      const detectedIssues = verificationData.detectedIssues || {};
+      if (geoAnomaly) {
+        detectedIssues.geo_anomaly = true;
+      }
+
+      return {
+        isVerified: !!verificationData.isVerified,
+        confidence: Number(verificationData.confidence) || 0,
+        healthScore: Number(verificationData.healthScore) || 0,
+        detectedIssues,
+        reportEn: verificationData.reportEn || "No report details generated.",
+        reportSw: verificationData.reportSw || "Hakuna maelezo ya ripoti yaliyotolewa.",
+        identifiedSpecies: verificationData.identifiedSpecies || "Unknown"
+      };
+    } catch (err: any) {
+      console.error("Gemini crop verification failed, failing closed:", err);
+      if (responseText) {
+        console.error("Raw Gemini response text was:\n", responseText);
+      }
+      return {
+        isVerified: false,
+        confidence: 0,
+        healthScore: 0,
+        detectedIssues: { api_failure: true },
+        reportEn: `AI crop verification service is temporarily unavailable: ${err.message}`,
+        reportSw: `Huduma ya uthibitishaji wa mazao ya AI haipatikani kwa sasa: ${err.message}`,
+        identifiedSpecies: "None",
+        reason: "GEMINI_API_FAILURE"
+      };
     }
-
-    const reportEn = `Observation: ${observation}\nInterpretation: ${interpretation}\nRecommended Actions:\n- ${rec1}\n- ${rec2}\n- ${rec3}`;
-    const reportSw = `Uchunguzi: ${translate(observation)}\nTafsiri: ${translate(interpretation)}\nHatua Zinazopendekezwa:\n- ${translate(rec1)}\n- ${translate(rec2)}\n- ${translate(rec3)}`;
-
-    return {
-      isVerified: true,
-      confidence: idResult.confidence,
-      healthScore,
-      detectedIssues: issues,
-      reportEn,
-      reportSw,
-      identifiedSpecies: idResult.species
-    };
   }
 }
 

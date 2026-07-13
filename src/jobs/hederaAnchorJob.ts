@@ -18,6 +18,14 @@ import { hederaAnchorService } from "../services/hederaAnchorService";
 import { Job } from "bullmq";
 
 export async function processHederaAnchor(job: Job) {
+  if (job.name === "anchor-submission") {
+    const { submissionId } = job.data;
+    console.log(`Starting Hedera anchoring for submission: ${submissionId}...`);
+    const result = await hederaAnchorService.anchor(submissionId);
+    console.log(`Completed Hedera anchoring for submission: ${submissionId}:`, result);
+    return result;
+  }
+
   console.log("Starting Hedera historical/catchup anchoring job...");
   const result = await hederaAnchorService.anchorAllCompletedWeeks();
   console.log("Completed Hedera weekly anchoring:", result);

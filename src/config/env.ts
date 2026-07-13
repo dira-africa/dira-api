@@ -40,11 +40,15 @@ const envSchema = z.object({
   HEDERA_NETWORK: z.enum(["testnet", "mainnet"]).default("testnet"),
   HEDERA_OPERATOR_ID: z.string().optional(),
   HEDERA_OPERATOR_KEY: z.string().optional(),
+  HEDERA_OPERATOR_KEY_TYPE: z.enum(["ED25519", "ECDSA"]).optional(),
   DIRA_HCS_TOPIC_ID: z.string().optional(),
   DIRA_HTS_TOKEN_ID: z.string().optional(),
   PRETIUM_BASE_URL: z.string().optional(),
   PRETIUM_API_KEY: z.string().optional(),
   PRETIUM_WEBHOOK_SECRET: z.string().optional(),
+  GEMINI_API_KEY: z.string({
+    required_error: "GEMINI_API_KEY environment variable is required for AI crop verification",
+  }),
 });
 
 const parsed = envSchema.safeParse(process.env);
