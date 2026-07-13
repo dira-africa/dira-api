@@ -18,6 +18,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src/db/migrations ./dist/db/migrations
 COPY --from=builder /app/package.json ./package.json
 
 EXPOSE 4000
