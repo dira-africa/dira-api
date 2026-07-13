@@ -23,6 +23,7 @@ import { env } from "../../config/env";
 interface RedeemAirtimeBody {
   tokenAmount: number;
   phoneNumber: string;
+  redemptionId?: string;
 }
 
 export default async function airtimeRoutes(fastify: FastifyInstance) {
@@ -33,7 +34,7 @@ export default async function airtimeRoutes(fastify: FastifyInstance) {
     { onRequest: [fastify.authenticate] },
     async (request, reply) => {
       const userId = request.user.id;
-      const { tokenAmount, phoneNumber } = request.body;
+      const { tokenAmount, phoneNumber, redemptionId } = request.body;
 
       // 1. Validation Checks for missing fields
       if (tokenAmount === undefined || !phoneNumber) {
@@ -43,8 +44,15 @@ export default async function airtimeRoutes(fastify: FastifyInstance) {
         });
       }
 
+      if (tokenAmount > 2000) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "EXCEEDS_MAX_LIMIT", message: "Maximum airtime redemption limit is 2000 Climate Tokens per request." }
+        });
+      }
+
       try {
-        const result = await airtimeService.initiateAirtimeRedemption(userId, tokenAmount, phoneNumber);
+        const result = await airtimeService.initiateAirtimeRedemption(userId, tokenAmount, phoneNumber, redemptionId);
         return {
           success: true,
           message: "Airtime sent successfully.",
@@ -56,6 +64,18 @@ export default async function airtimeRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({
             success: false,
             error: { code: "MINIMUM_REDEMPTION", message: "Minimum redemption is 20 Climate Tokens." }
+          });
+        }
+        if (err.message === "EXCEEDS_MAX_LIMIT") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "EXCEEDS_MAX_LIMIT", message: "Maximum airtime redemption limit is 2000 Climate Tokens per request." }
+          });
+        }
+        if (err.message === "TRANSACTION_FAILED") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "TRANSACTION_FAILED", message: "This redemption transaction previously failed." }
           });
         }
         if (err.message === "INVALID_PHONE_NUMBER") {

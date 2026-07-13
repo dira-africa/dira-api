@@ -34,13 +34,18 @@ const at = AfricaTalking({
 export async function initiateAirtimeRedemption(
   userId: string,
   tokenAmount: number,
-  phoneNumber: string
+  phoneNumber: string,
+  redemptionId: string = randomUUID()
 ): Promise<{ success: boolean; transactionId?: string; error?: string }> {
   const KES_PER_TOKEN = 0.55;
   const kesAmount = tokenAmount * KES_PER_TOKEN;
 
   if (tokenAmount < 20) {
     return { success: false, error: "MINIMUM_20_TOKENS" };
+  }
+
+  if (tokenAmount > 2000) {
+    return { success: false, error: "EXCEEDS_MAX_LIMIT" };
   }
 
   const phoneRegex = /^(\+?254|0)[17][0-9]{8}$/;
@@ -54,7 +59,23 @@ export async function initiateAirtimeRedemption(
       ? phoneNumber
       : `+${phoneNumber}`;
 
-  const redemptionId = randomUUID();
+  // Idempotency check: see if redemptionId already exists
+  if (redemptionId) {
+    const existing = await query(
+      "SELECT id, status, at_transaction_id, amount_kes FROM redemption_requests WHERE id = $1",
+      [redemptionId]
+    );
+    if (existing.rows.length > 0) {
+      const row = existing.rows[0];
+      if (row.status === "completed") {
+        return { success: true, transactionId: row.at_transaction_id || "completed" };
+      }
+      if (row.status === "failed") {
+        return { success: false, error: "TRANSACTION_FAILED" };
+      }
+      return { success: true, transactionId: row.at_transaction_id || "pending" };
+    }
+  }
 
   // Insert pending record in redemption_requests for logging and tests
   await query(
@@ -191,7 +212,8 @@ export class AirtimeService {
   async initiateAirtimeRedemption(
     userId: string,
     tokenAmount: number,
-    phoneNumber: string
+    phoneNumber: string,
+    redemptionId?: string
   ): Promise<{ success: boolean; kes_disbursed: number; phone: string; transactionId: string }> {
     const formattedPhoneNumber = phoneNumber.startsWith("0")
       ? `+254${phoneNumber.substring(1)}`
@@ -199,10 +221,16 @@ export class AirtimeService {
         ? phoneNumber
         : `+${phoneNumber}`;
 
-    const res = await initiateAirtimeRedemption(userId, tokenAmount, formattedPhoneNumber);
+    const res = await initiateAirtimeRedemption(userId, tokenAmount, formattedPhoneNumber, redemptionId);
     if (!res.success) {
       if (res.error === "MINIMUM_20_TOKENS") {
         throw new Error("BELOW_MINIMUM_TOKENS");
+      }
+      if (res.error === "EXCEEDS_MAX_LIMIT") {
+        throw new Error("EXCEEDS_MAX_LIMIT");
+      }
+      if (res.error === "TRANSACTION_FAILED") {
+        throw new Error("TRANSACTION_FAILED");
       }
       if (res.error === "INVALID_PHONE_NUMBER") {
         throw new Error("INVALID_PHONE_NUMBER");

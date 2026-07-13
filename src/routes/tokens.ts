@@ -27,6 +27,7 @@ import { sanitizePhone } from "../lib/sanitize";
 interface RedeemAirtimeRouteBody {
   token_amount: number;
   phone_number: string;
+  redemption_id?: string;
 }
 
 interface RedeemVoucherRouteBody {
@@ -172,6 +173,10 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
             phone_number: { 
               type: "string", 
               pattern: "^(\\+?254|0)[17][0-9]{8}$" 
+            },
+            redemption_id: {
+              type: "string",
+              format: "uuid"
             }
           }
         }
@@ -179,7 +184,7 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
     },
     async (request, reply) => {
       const userId = request.user.id;
-      const { token_amount, phone_number } = request.body;
+      const { token_amount, phone_number, redemption_id } = request.body;
       const sanitizedPhone = sanitizePhone(phone_number);
 
       // Duplicate/Fallback manual validation just to be fully secure
@@ -187,6 +192,13 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({
           success: false,
           error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
+        });
+      }
+
+      if (token_amount > 2000) {
+        return reply.status(400).send({
+          success: false,
+          error: { code: "EXCEEDS_MAX_LIMIT", message: "Maximum airtime redemption limit is 2000 Climate Tokens per request." }
         });
       }
 
@@ -202,7 +214,8 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
         const result = await airtimeService.initiateAirtimeRedemption(
           userId,
           token_amount,
-          sanitizedPhone
+          sanitizedPhone,
+          redemption_id
         );
         return result;
       } catch (err: any) {
@@ -210,6 +223,18 @@ export default async function tokensRoutes(fastify: FastifyInstance) {
           return reply.status(400).send({
             success: false,
             error: { code: "BELOW_MINIMUM_TOKENS", message: "Token amount must be at least 20." }
+          });
+        }
+        if (err.message === "EXCEEDS_MAX_LIMIT") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "EXCEEDS_MAX_LIMIT", message: "Maximum airtime redemption limit is 2000 Climate Tokens per request." }
+          });
+        }
+        if (err.message === "TRANSACTION_FAILED") {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "TRANSACTION_FAILED", message: "This redemption transaction previously failed." }
           });
         }
         if (err.message === "INVALID_PHONE_NUMBER") {

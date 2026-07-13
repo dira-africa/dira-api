@@ -26,6 +26,56 @@ export default async function webhooksRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post("/africastalking/callback", async (request, reply) => {
-    return { success: true };
+    const body = (request.body || {}) as any;
+    const { requestId, status, errorMessage } = body;
+
+    fastify.log.info(`[AfricaTalking Callback] Received callback for request ${requestId}: status=${status}, error=${errorMessage}`);
+
+    if (!requestId) {
+      return reply.status(400).send({ success: false, error: "Missing requestId" });
+    }
+
+    try {
+      // Find the redemption request matching the at_transaction_id (which is requestId)
+      const res = await query(
+        "SELECT id, user_id, tokens_spent, status FROM redemption_requests WHERE at_transaction_id = $1",
+        [requestId]
+      );
+
+      if (res.rows.length === 0) {
+        fastify.log.warn(`[AfricaTalking Callback] No redemption request found for transaction ID: ${requestId}`);
+        return { success: true }; // Return 200 OK so AT doesn't keep retrying
+      }
+
+      const redemption = res.rows[0];
+
+      // Reconcile status
+      if (status === "Success" || status === "Sent") {
+        if (redemption.status !== "completed") {
+          await query(
+            "UPDATE redemption_requests SET status = 'completed', completed_at = CURRENT_TIMESTAMP WHERE id = $1",
+            [redemption.id]
+          );
+          fastify.log.info(`[AfricaTalking Callback] Redemption ${redemption.id} marked as completed.`);
+        }
+      } else if (status === "Failed" || status === "Failure") {
+        if (redemption.status !== "failed") {
+          // Refund the spent tokens
+          const { refundTokens } = await import("../services/tokenService");
+          await refundTokens(redemption.user_id, redemption.tokens_spent, redemption.id);
+
+          await query(
+            "UPDATE redemption_requests SET status = 'failed', failure_reason = $1, completed_at = CURRENT_TIMESTAMP WHERE id = $2",
+            [errorMessage || "Africa's Talking Callback status: Failed", redemption.id]
+          );
+          fastify.log.info(`[AfricaTalking Callback] Redemption ${redemption.id} marked as failed and tokens refunded.`);
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      fastify.log.error(`[AfricaTalking Callback] Error processing callback: ${err.message}`);
+      return reply.status(500).send({ success: false, error: err.message });
+    }
   });
 }
