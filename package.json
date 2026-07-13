@@ -18,7 +18,7 @@
     "dira",
     "api"
   ],
-  "author": "Blockchain & Climate Institute",
+  "author": "Dira Africa",
   "license": "Apache-2.0",
   "dependencies": {
     "@google/generative-ai": "^0.21.0",

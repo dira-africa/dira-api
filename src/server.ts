@@ -59,9 +59,15 @@ async function main() {
       },
     });
 
-    // 2. Register CORS with whitelist
+    // 2. Register CORS with dynamic origin matching localhost and production patterns
     await server.register(cors, {
-      origin: ["https://app.diraafrica.org", "http://localhost:3000"],
+      origin: (origin, cb) => {
+        if (!origin || origin.startsWith("http://localhost:") || origin === "https://app.diraafrica.org" || origin === "https://diraafrica.org") {
+          cb(null, true);
+          return;
+        }
+        cb(new Error("Not allowed by CORS"), false);
+      },
       methods: ["GET", "POST", "PATCH", "DELETE"],
       allowedHeaders: ["Content-Type", "Authorization"],
       credentials: true,
