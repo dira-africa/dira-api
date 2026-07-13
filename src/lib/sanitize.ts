@@ -17,11 +17,11 @@
 /**
  * Trim, remove null bytes (\0), and truncate string to a maximum of 500 characters.
  */
-export function sanitizeString(input: any): string {
+export function sanitizeString(input: any, maxLength = 500): string {
   if (typeof input !== "string") {
     return "";
   }
-  return input.replace(/\0/g, "").trim().slice(0, 500);
+  return input.replace(/\0/g, "").trim().slice(0, maxLength);
 }
 
 /**

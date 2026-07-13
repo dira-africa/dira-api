@@ -30,7 +30,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       }
     },
     async (request, reply) => {
-      const initData = sanitizeString(request.body.initData);
+      const initData = sanitizeString(request.body.initData, 4096);
 
       if (!initData) {
         await query(
