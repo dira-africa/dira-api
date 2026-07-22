@@ -17,6 +17,7 @@
 import { query } from "../db/query";
 import { pool } from "../db/pool";
 import { redis } from "../db/redis";
+import { reputationService } from "./reputationService";
 
 // Simple in-memory cache for Open-Meteo hourly reference results
 // Key: lat_lng_date, Value: array of 24 pressure values
@@ -329,6 +330,18 @@ export class TriangulationService {
       [verified, anomalyScore, openMeteoRef, networkConsensus, readingId]
     );
 
+    // Update Data Agent reputation based on reading outcome
+    try {
+      await reputationService.updateReputation(
+        userId,
+        "atmospheric",
+        readingId,
+        verified ? "success" : "failure"
+      );
+    } catch (repErr: any) {
+      console.error("Failed to update reputation for atmospheric sync:", repErr.message);
+    }
+
     // 7. Token ledger handling
     const ledgerRes = await query(
       `SELECT id FROM token_ledger
@@ -336,8 +349,10 @@ export class TriangulationService {
       [readingId]
     );
 
+    const isEligible = await reputationService.checkRewardEligibility(userId);
+
     if (ledgerRes.rows.length > 0) {
-      if (verified) {
+      if (verified && isEligible) {
         // Daily sync limit check
         const limitRes = await query(
           `SELECT count AS count FROM (
@@ -365,8 +380,9 @@ export class TriangulationService {
           await this.reversePendingToken(userId, readingId, "Daily limit reached - reversed");
         }
       } else {
-        // Anomalous - reverse pending token
-        await this.reversePendingToken(userId, readingId, "Failed consensus - reversed");
+        // Anomalous OR Ineligible - reverse pending token
+        const reason = !isEligible ? "Flagged/Ineligible agent - reversed" : "Failed consensus - reversed";
+        await this.reversePendingToken(userId, readingId, reason);
       }
     }
 

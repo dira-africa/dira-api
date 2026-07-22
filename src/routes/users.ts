@@ -56,7 +56,7 @@ export default async function usersRoutes(fastify: FastifyInstance) {
           `SELECT id, telegram_id, telegram_username, 
                   CASE WHEN phone_number IS NOT NULL THEN pgp_sym_decrypt(phone_number::bytea, $1) ELSE NULL END AS phone_number,
                   full_name, role, language, county, is_verified, is_active, 
-                  created_at, privacy_policy_accepted_at, delete_requested_at
+                  created_at, privacy_policy_accepted_at, delete_requested_at, alerts_enabled
            FROM users WHERE id = $2`,
           [env.PGCRYPTO_SYMMETRIC_KEY, userId]
         );
@@ -108,6 +108,67 @@ export default async function usersRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "EXPORT_FAILED", message: err.message || "Failed to export data." }
+        });
+      }
+    }
+  );
+
+  // 3. GET /api/users/me
+  fastify.get(
+    "/me",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const userId = request.user.id;
+      try {
+        const userRes = await query(
+          `SELECT id, telegram_id, telegram_username, full_name, role, language, county, alerts_enabled, is_verified, is_active 
+           FROM users WHERE id = $1`,
+          [userId]
+        );
+        if (userRes.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "USER_NOT_FOUND", message: "User not found." }
+          });
+        }
+        return { success: true, user: userRes.rows[0] };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve profile." }
+        });
+      }
+    }
+  );
+
+  // 4. PUT /api/users/me/alerts
+  fastify.put<{ Body: { enabled: boolean } }>(
+    "/me/alerts",
+    {
+      onRequest: [fastify.authenticate],
+      schema: {
+        body: {
+          type: "object",
+          required: ["enabled"],
+          properties: {
+            enabled: { type: "boolean" }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const { enabled } = request.body;
+      try {
+        await query(
+          "UPDATE users SET alerts_enabled = $1 WHERE id = $2",
+          [enabled, userId]
+        );
+        return { success: true, message: `Alerts successfully ${enabled ? "enabled" : "disabled"}.` };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to update alert preference." }
         });
       }
     }

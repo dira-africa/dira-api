@@ -21,13 +21,15 @@ import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
   notificationsQueue,
-  hederaAnchorQueue
+  hederaAnchorQueue,
+  airtimeQueue
 } from "../jobs/queues";
 import {
   photoVerificationWorker,
   atmosphericVerificationWorker,
   notificationsWorker,
-  hederaAnchorWorker
+  hederaAnchorWorker,
+  airtimeWorker
 } from "../jobs/workers";
 
 declare module "fastify" {
@@ -36,6 +38,7 @@ declare module "fastify" {
     atmosphericVerificationQueue: Queue;
     notificationsQueue: Queue;
     hederaAnchorQueue: Queue;
+    airtimeQueue: Queue;
     // Keep compatibility helper jobsQueue targeting the photoVerificationQueue
     jobsQueue: Queue;
   }
@@ -47,6 +50,7 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.decorate("atmosphericVerificationQueue", atmosphericVerificationQueue);
   fastify.decorate("notificationsQueue", notificationsQueue);
   fastify.decorate("hederaAnchorQueue", hederaAnchorQueue);
+  fastify.decorate("airtimeQueue", airtimeQueue);
   
   // Keep compatibility decorator
   fastify.decorate("jobsQueue", photoVerificationQueue);
@@ -176,12 +180,14 @@ const jobsPlugin: FastifyPluginAsync = async (fastify: FastifyInstance) => {
     await atmosphericVerificationWorker.close();
     await notificationsWorker.close();
     await hederaAnchorWorker.close();
+    await airtimeWorker.close();
 
     // Close queues
     await photoVerificationQueue.close();
     await atmosphericVerificationQueue.close();
     await notificationsQueue.close();
     await hederaAnchorQueue.close();
+    await airtimeQueue.close();
 
     instance.log.info("BullMQ shut down successfully.");
   });

@@ -1,5 +1,6 @@
 import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
+import { getOutcomeAndReason, getAirtimeBreakdown } from "../services/verificationService";
 
 interface FarmerProfileBody {
   fullName: string;
@@ -63,10 +64,18 @@ export default async function farmersRoutes(fastify: FastifyInstance) {
       const submissionId = request.params.id;
 
       try {
+        const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+        const lang = userRes.rows[0]?.language === "sw" ? "sw" : "en";
+
         const res = await query(
-          `SELECT id, photo_url, crop_type, growth_stage, verification_status, ai_health_score, ai_confidence, ai_report_en, ai_report_sw, ai_detected_issues, ST_X(location::geometry) AS longitude, ST_Y(location::geometry) AS latitude, rejection_reason, submitted_at, verified_at
-           FROM crop_submissions
-           WHERE id = $1 AND user_id = $2`,
+          `SELECT cs.id, cs.photo_url, cs.crop_type, cs.growth_stage, cs.verification_status, cs.ai_health_score, cs.ai_confidence, 
+                  cs.ai_report_en, cs.ai_report_sw, cs.ai_detected_issues, ST_X(cs.location::geometry) AS longitude, ST_Y(cs.location::geometry) AS latitude, 
+                  cs.rejection_reason, cs.submitted_at, cs.verified_at, cs.verification_score, cs.verification_factors,
+                  cs.is_appealed, cs.appeal_reason, cs.appealed_at,
+                  COALESCE(tt.amount, 0) AS actual_tokens
+           FROM crop_submissions cs
+           LEFT JOIN token_transactions tt ON cs.id = tt.reference_id AND tt.type = 'earn' AND tt.status = 'confirmed'
+           WHERE cs.id = $1 AND cs.user_id = $2`,
           [submissionId, userId]
         );
 
@@ -77,9 +86,24 @@ export default async function farmersRoutes(fastify: FastifyInstance) {
           });
         }
 
+        const row = res.rows[0];
+        const outcomeInfo = getOutcomeAndReason(
+          row.verification_status,
+          row.verification_factors,
+          row.rejection_reason,
+          lang
+        );
+
+        const submission = {
+          ...row,
+          outcome: outcomeInfo.outcome,
+          outcome_reason: outcomeInfo.reason,
+          airtime_breakdown: getAirtimeBreakdown(Number(row.actual_tokens))
+        };
+
         return {
           success: true,
-          submission: res.rows[0]
+          submission
         };
       } catch (err: any) {
         return reply.status(500).send({

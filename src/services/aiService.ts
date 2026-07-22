@@ -19,6 +19,7 @@ import sharp from "sharp";
 import { query } from "../db/query";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "../config/env";
+import { dependencyRegistry } from "./dependencyRegistry";
 
 export interface VerificationResult {
   isVerified: boolean;
@@ -277,6 +278,20 @@ export class AiService {
     }
 
     // 8. Call Google Gemini Vision model
+    if (!dependencyRegistry.isAvailable("gemini")) {
+      console.warn("⚠️ Gemini Circuit Breaker is OPEN. Skipping Gemini API call.");
+      return {
+        isVerified: false,
+        confidence: 0,
+        healthScore: 0,
+        detectedIssues: { api_failure: true, circuit_breaker_open: true },
+        reportEn: "AI crop verification service is temporarily offline.",
+        reportSw: "Huduma ya uthibitishaji wa mazao ya AI haipatikani kwa sasa.",
+        identifiedSpecies: "None",
+        reason: "GEMINI_API_FAILURE"
+      };
+    }
+
     if (!this.genAI) {
       // If API key is not configured, fallback/mock for local offline development
       console.warn("⚠️ Google GenAI is not initialized (GEMINI_API_KEY missing). Falling back to development mock.");
@@ -328,7 +343,7 @@ You must evaluate and return a JSON object with the following fields:
 Output only the JSON object, do not include any markdown styling, code blocks, or extra text.
 `;
 
-      const result = await model.generateContent({
+      const generatePromise = model.generateContent({
         contents: [
           {
             role: "user",
@@ -348,6 +363,12 @@ Output only the JSON object, do not include any markdown styling, code blocks, o
         }
       });
 
+      const timeoutPromise = new Promise<any>((_, reject) =>
+        setTimeout(() => reject(new Error("Gemini API call timed out")), 5000)
+      );
+
+      const result = await Promise.race([generatePromise, timeoutPromise]);
+
       responseText = result.response.text();
       const verificationData = JSON.parse(responseText.trim());
 
@@ -355,6 +376,8 @@ Output only the JSON object, do not include any markdown styling, code blocks, o
       if (geoAnomaly) {
         detectedIssues.geo_anomaly = true;
       }
+
+      dependencyRegistry.recordSuccess("gemini");
 
       return {
         isVerified: !!verificationData.isVerified,
@@ -367,6 +390,7 @@ Output only the JSON object, do not include any markdown styling, code blocks, o
       };
     } catch (err: any) {
       console.error("Gemini crop verification failed, failing closed:", err);
+      dependencyRegistry.recordFailure("gemini", err);
       if (responseText) {
         console.error("Raw Gemini response text was:\n", responseText);
       }

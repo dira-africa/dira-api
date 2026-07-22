@@ -21,6 +21,8 @@ import { processPhotoVerification } from "./photoVerificationJob";
 import { processAtmosphericVerification } from "./atmosphericVerificationJob";
 import { processNotification } from "./notificationJob";
 import { processHederaAnchor } from "./hederaAnchorJob";
+import { processAirtimeRedemption } from "./airtimeJob";
+import { refundTokens } from "../services/tokenService";
 
 // Helper: Handle job attempt failure (transient error)
 async function handleJobAttemptFailed(job: Job, err: Error) {
@@ -64,6 +66,38 @@ async function handleJobRetriesExhausted(job: Job, err: Error) {
          WHERE reference_id = $1 AND transaction_type = 'atmospheric_sync'`,
         [job.data.readingId]
       );
+    } else if (job.queueName === "airtime" && job.data.redemptionId) {
+      const { userId, tokenAmount, redemptionId } = job.data;
+      try {
+        await refundTokens(userId, tokenAmount, redemptionId);
+      } catch (refundErr) {
+        console.error("Failed to refund tokens on exhausted airtime job:", refundErr);
+      }
+      await query(
+        `UPDATE redemption_requests 
+         SET status = 'failed', failure_reason = $1, completed_at = CURRENT_TIMESTAMP 
+         WHERE id = $2`,
+        [`Retries exhausted: ${err.message || "Africa's Talking error"}`, redemptionId]
+      );
+      
+      // Notify the farmer of failure and refund
+      try {
+        const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);
+        const user = userRes.rows[0];
+        if (user && user.telegram_id) {
+          const isSw = user.language === "sw";
+          const msg = isSw 
+            ? `Samahani, tumeshindwa kutuma salio lako. Tokens ${tokenAmount} zimerudishwa kwenye akaunti yako.`
+            : `We were unable to disburse your airtime. ${tokenAmount} tokens have been refunded to your account.`;
+          
+          await notificationsQueue.add("send-telegram", {
+            telegramId: String(user.telegram_id),
+            message: msg
+          });
+        }
+      } catch (notifErr) {
+        console.error("Failed to notify user of failed airtime:", notifErr);
+      }
     }
   } catch (dbErr) {
     console.error(`Failed to update manual_review status for job ${job.id}:`, dbErr);
@@ -143,12 +177,19 @@ export const hederaAnchorWorker = new Worker(
   { connection, concurrency: 1 }
 );
 
+export const airtimeWorker = new Worker(
+  "airtime",
+  createWorkerProcessor(processAirtimeRedemption),
+  { connection, concurrency: 1 }
+);
+
 // Worker events loggers
 const workers = [
   photoVerificationWorker,
   atmosphericVerificationWorker,
   notificationsWorker,
-  hederaAnchorWorker
+  hederaAnchorWorker,
+  airtimeWorker
 ];
 
 workers.forEach(w => {

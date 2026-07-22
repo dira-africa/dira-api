@@ -16,8 +16,9 @@
 
 import { Job } from "bullmq";
 import { query } from "../db/query";
-import { aiService } from "../services/aiService";
+import { verificationService, getOutcomeAndReason } from "../services/verificationService";
 import { tokenService } from "../services/tokenService";
+import { reputationService } from "../services/reputationService";
 import { notificationsQueue, hederaAnchorQueue } from "./queues";
 import path from "path";
 import fs from "fs";
@@ -29,69 +30,140 @@ export async function processPhotoVerification(job: Job) {
   const filePath = path.join(__dirname, "../../public/uploads", filename);
 
   try {
-    // Call AI photo verification service, passing farmId and GPS coordinates
-    const aiResult = await aiService.verifyCropPhoto(filePath, cropType, farmId, latitude, longitude);
+    // Execute the Bayesian Verification pipeline combining all diagnostic signals
+    const result = await verificationService.verifyCropSubmission(submissionId, {
+      photoPath: filePath,
+      cropType,
+      latitude,
+      longitude,
+      userId,
+      farmId,
+      growthStage
+    });
 
-    if (!aiResult.isVerified) {
-      await query(
-        `UPDATE crop_submissions
-         SET verification_status = 'rejected',
-             rejection_reason = $1,
-             ai_health_score = $2,
-             ai_confidence = $3,
-             ai_detected_issues = $4,
-             ai_report_en = $5,
-             ai_report_sw = $6
-         WHERE id = $7`,
-        [
-          aiResult.reason || aiResult.reportEn,
-          aiResult.healthScore,
-          aiResult.confidence,
-          JSON.stringify(aiResult.detectedIssues),
-          aiResult.reportEn,
-          aiResult.reportSw,
-          submissionId
-        ]
-      );
-      return { verified: false, reason: aiResult.reason || "AI_VERIFICATION_FAILED" };
-    }
+    const aiResult = result.aiResult;
 
-    // Update submission record to verified
+    // Update the crop_submissions table with score and factors
     await query(
       `UPDATE crop_submissions
-       SET verification_status = 'verified',
-           ai_health_score = $1,
-           ai_confidence = $2,
-           ai_detected_issues = $3,
-           ai_report_en = $4,
-           ai_report_sw = $5,
-           verified_at = CURRENT_TIMESTAMP
-       WHERE id = $6`,
+       SET verification_status = $1,
+           ai_health_score = $2,
+           ai_confidence = $3,
+           ai_detected_issues = $4,
+           ai_report_en = $5,
+           ai_report_sw = $6,
+           rejection_reason = $7,
+           verification_score = $8,
+           verification_factors = $9,
+           perceptual_hash = $10,
+           verified_at = CASE WHEN $1 = 'verified' THEN CURRENT_TIMESTAMP ELSE verified_at END,
+           needs_recheck = $11
+       WHERE id = $12`,
       [
+        result.status,
         aiResult.healthScore,
         aiResult.confidence,
         JSON.stringify(aiResult.detectedIssues),
         aiResult.reportEn,
         aiResult.reportSw,
+        result.status === "rejected" ? (aiResult.reason || "BAYESIAN_REJECTION") : null,
+        result.score,
+        JSON.stringify(result.factors),
+        result.perceptualHash,
+        result.needsRecheck || false,
         submissionId
       ]
     );
 
-    // Calculate token awards: 5 standard, 1 bonus if all checks pass and confidence > 0.85
+    // Write to calibration log and update Farmer reputation if outcome is auto-verified or auto-rejected
+    if (result.status === "verified" || result.status === "rejected") {
+      try {
+        await query(
+          `INSERT INTO verification_calibration_logs (submission_id, predicted_probability, eventual_outcome)
+           VALUES ($1, $2, $3)`,
+          [submissionId, result.score, result.status]
+        );
+      } catch (logErr: any) {
+        console.error("Failed to write to calibration log:", logErr.message);
+      }
+
+      try {
+        await reputationService.updateReputation(
+          userId,
+          "crop",
+          submissionId,
+          result.status === "verified" ? "success" : "failure"
+        );
+      } catch (repErr: any) {
+        console.error("Failed to update reputation for crop submission:", repErr.message);
+      }
+    }
+
+    if (result.status === "rejected") {
+      const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);
+      const farmerTelegramId = userRes.rows[0]?.telegram_id;
+      const farmerLang = userRes.rows[0]?.language || "en";
+
+      if (farmerTelegramId) {
+        const isSw = farmerLang === "sw";
+        const reasonText = aiResult.reason || "BAYESIAN_REJECTION";
+        
+        const plainReason = getOutcomeAndReason("rejected", result.factors, reasonText, farmerLang).reason;
+        
+        const rejectMsg = isSw
+          ? `Habari! Uwasilishaji wako wa ${cropType} umekataliwa. Sababu: ${plainReason}`
+          : `Hello! Your crop submission for ${cropType} was rejected. Reason: ${plainReason}`;
+
+        await notificationsQueue.add("send-telegram", {
+          telegramId: String(farmerTelegramId),
+          message: rejectMsg
+        });
+      }
+
+      return { verified: false, reason: aiResult.reason || "BAYESIAN_REJECTION", score: result.score };
+    }
+
+    if (result.status === "manual_review") {
+      // Send a Telegram alert to farmer notifying them that their submission is under manual review
+      const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);
+      const farmerTelegramId = userRes.rows[0]?.telegram_id;
+      const farmerLang = userRes.rows[0]?.language || "en";
+
+      if (farmerTelegramId) {
+        const isSw = farmerLang === "sw";
+        const reviewMsg = isSw
+          ? `Mambo! Uwasilishaji wako unafanyiwa ukaguzi wa mwongozo. Tutakuarifu hivi karibuni.`
+          : `Hello! Your submission is under manual review. We will notify you once resolved.`;
+
+        await notificationsQueue.add("send-telegram", {
+          telegramId: String(farmerTelegramId),
+          message: reviewMsg
+        });
+      }
+
+      return { verified: false, status: "manual_review", score: result.score };
+    }
+
+    // Award tokens to user if status is 'verified' and they are eligible for rewards
+    const isEligible = await reputationService.checkRewardEligibility(userId);
     const hasGeoAnomaly = aiResult.detectedIssues?.geo_anomaly === true;
     const hasSpeciesMismatch = aiResult.detectedIssues?.species_mismatch === true;
     const isBonus = aiResult.confidence > 0.85 && !hasGeoAnomaly && !hasSpeciesMismatch;
     const tokensToAward = isBonus ? 6 : 5;
 
-    await tokenService.awardTokens(
-      userId,
-      tokensToAward,
-      `Reward for verified crop photo submission of ${cropType} (${growthStage})${isBonus ? " - High Confidence Bonus" : ""}`,
-      "crop_photo",
-      submissionId
-    );
+    if (isEligible) {
+      await tokenService.awardTokens(
+        userId,
+        tokensToAward,
+        `Reward for verified crop photo submission of ${cropType} (${growthStage})${isBonus ? " - High Confidence Bonus" : ""}`,
+        "crop_photo",
+        submissionId
+      );
+    } else {
+      console.warn(`User ${userId} is flagged/ineligible: Skipping auto-reward credit for crop submission ${submissionId}`);
+    }
 
-    // Queue anchoring to Hedera HCS Topic
+    // Queue anchoring of SHA-256 hash to Hedera HCS Topic (Score and metadata remains off-chain)
     try {
       await hederaAnchorQueue.add("anchor-submission", { submissionId });
       console.log(`Queued Hedera anchoring job for submission ${submissionId}`);
@@ -118,7 +190,7 @@ export async function processPhotoVerification(job: Job) {
       });
     }
 
-    return { verified: true, tokensAwarded: tokensToAward };
+    return { verified: true, tokensAwarded: tokensToAward, score: result.score };
   } finally {
     // Clean up: delete original photo file from server to prevent disk bloat
     if (fs.existsSync(filePath)) {
@@ -131,3 +203,4 @@ export async function processPhotoVerification(job: Job) {
     }
   }
 }
+

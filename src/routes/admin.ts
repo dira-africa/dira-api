@@ -24,6 +24,8 @@ import { diraCircleService } from "../services/diraCircleService";
 import { paymentService } from "../services/paymentService";
 import { env } from "../config/env";
 import { tokenService } from "../services/tokenService";
+import { reputationService } from "../services/reputationService";
+import { dependencyRegistry } from "../services/dependencyRegistry";
 import {
   photoVerificationQueue,
   atmosphericVerificationQueue,
@@ -687,12 +689,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         const cropsRes = await query(
           `SELECT cs.id, cs.user_id, cs.crop_type, cs.growth_stage, cs.verification_status, cs.submitted_at, 
                   cs.photo_url, cs.photo_thumbnail_url, cs.ai_health_score, cs.ai_confidence, cs.ai_detected_issues, 
-                  cs.rejection_reason, cs.admin_notes, u.full_name,
+                  cs.rejection_reason, cs.admin_notes, cs.is_appealed, cs.appeal_reason, cs.appealed_at, u.full_name,
                   ST_X(cs.location::geometry) AS longitude, ST_Y(cs.location::geometry) AS latitude
            FROM crop_submissions cs
            LEFT JOIN users u ON cs.user_id = u.id
            WHERE cs.verification_status = 'manual_review'
               OR cs.verification_status = 'escalated'
+              OR cs.verification_status = 'appealed'
+              OR cs.is_appealed = TRUE
               OR cs.ai_detected_issues->>'geo_anomaly' = 'true'
               OR cs.ai_detected_issues->>'species_mismatch' = 'true'
            ORDER BY cs.submitted_at DESC`
@@ -760,6 +764,22 @@ export default async function adminRoutes(fastify: FastifyInstance) {
 
           await query("UPDATE crop_submissions SET verification_status = 'verified', verified_at = CURRENT_TIMESTAMP WHERE id = $1", [id]);
           
+          try {
+            await query(
+              `INSERT INTO verification_calibration_logs (submission_id, predicted_probability, eventual_outcome)
+               SELECT id, verification_score, 'verified' FROM crop_submissions WHERE id = $1`,
+              [id]
+            );
+          } catch (logErr: any) {
+            console.error("Failed to insert calibration log on admin approval:", logErr.message);
+          }
+
+          try {
+            await reputationService.updateReputation(submission.user_id, "crop", id, "success");
+          } catch (repErr: any) {
+            console.error("Failed to update reputation on admin approval:", repErr.message);
+          }
+
           await tokenService.awardTokens(submission.user_id, 15, "Admin approved crop submission", "crop_photo", id);
 
           if (submission.telegram_id) {
@@ -787,6 +807,22 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           }
 
           await query("UPDATE crop_submissions SET verification_status = 'rejected', rejection_reason = $1 WHERE id = $2", [reason.trim(), id]);
+
+          try {
+            await query(
+              `INSERT INTO verification_calibration_logs (submission_id, predicted_probability, eventual_outcome)
+               SELECT id, verification_score, 'rejected' FROM crop_submissions WHERE id = $1`,
+              [id]
+            );
+          } catch (logErr: any) {
+            console.error("Failed to insert calibration log on admin rejection:", logErr.message);
+          }
+
+          try {
+            await reputationService.updateReputation(submission.user_id, "crop", id, "failure");
+          } catch (repErr: any) {
+            console.error("Failed to update reputation on admin rejection:", repErr.message);
+          }
 
           if (submission.telegram_id) {
             const isSw = submission.language === "sw";
@@ -863,6 +899,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           
           await query("UPDATE atmospheric_readings SET verified = TRUE, verification_status = 'verified' WHERE id = $1", [id]);
           
+          try {
+            await reputationService.updateReputation(reading.user_id, "atmospheric", id, "success");
+          } catch (repErr: any) {
+            console.error("Failed to update reputation on admin sync approval:", repErr.message);
+          }
+          
           const ledgerCheck = await query(
             `SELECT id, notes FROM token_ledger WHERE reference_id = $1 AND transaction_type = 'atmospheric_sync'`,
             [id]
@@ -913,6 +955,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           }
 
           await query("UPDATE atmospheric_readings SET verified = FALSE, verification_status = 'rejected', admin_notes = $1 WHERE id = $2", [reason.trim(), id]);
+
+          try {
+            await reputationService.updateReputation(reading.user_id, "atmospheric", id, "failure");
+          } catch (repErr: any) {
+            console.error("Failed to update reputation on admin sync rejection:", repErr.message);
+          }
 
           await query(
             `UPDATE token_ledger SET notes = 'reversed' WHERE reference_id = $1 AND transaction_type = 'atmospheric_sync' AND notes = 'pending'`,
@@ -2123,6 +2171,408 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to generate report." }
+        });
+      }
+    }
+  );
+
+  // 30. GET /api/admin/verification/calibration-report - Generate predicted probability vs actual outcome stats
+  fastify.get(
+    "/verification/calibration-report",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          `SELECT predicted_probability, eventual_outcome, logged_at 
+           FROM verification_calibration_logs
+           ORDER BY logged_at DESC`
+        );
+        const logs = res.rows.map(row => ({
+          predictedProbability: Number(row.predicted_probability),
+          eventualOutcome: row.eventual_outcome,
+          loggedAt: row.logged_at
+        }));
+
+        const bins = Array.from({ length: 10 }, (_, i) => ({
+          min: Number((i * 0.1).toFixed(1)),
+          max: Number(((i + 1) * 0.1).toFixed(1)),
+          count: 0,
+          verifiedCount: 0,
+          actualFrequency: 0
+        }));
+
+        let brierScoreSum = 0;
+        for (const log of logs) {
+          const p = log.predictedProbability;
+          const y = log.eventualOutcome === "verified" ? 1 : 0;
+          brierScoreSum += Math.pow(p - y, 2);
+
+          const binIndex = Math.min(9, Math.floor(p * 10));
+          bins[binIndex].count++;
+          if (y === 1) {
+            bins[binIndex].verifiedCount++;
+          }
+        }
+
+        const brierScore = logs.length > 0 ? (brierScoreSum / logs.length) : 0;
+
+        for (const bin of bins) {
+          if (bin.count > 0) {
+            bin.actualFrequency = Number((bin.verifiedCount / bin.count).toFixed(4));
+          }
+        }
+
+        return {
+          success: true,
+          totalCount: logs.length,
+          brierScore: Number(brierScore.toFixed(5)),
+          bins
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to generate calibration report." }
+        });
+      }
+    }
+  );
+
+  // 31. GET /api/admin/reputation/users - Get list of agents with trust scores and tiers
+  fastify.get(
+    "/reputation/users",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          `SELECT ar.user_id, u.full_name, u.role, u.email, ar.alpha, ar.beta, ar.trust_score, ar.trust_tier, ar.updated_at
+           FROM agent_reputations ar
+           JOIN users u ON ar.user_id = u.id
+           ORDER BY ar.trust_score DESC`
+        );
+        const users = res.rows.map(row => ({
+          userId: row.user_id,
+          fullName: row.full_name,
+          role: row.role,
+          email: row.email,
+          alpha: Number(row.alpha),
+          beta: Number(row.beta),
+          trustScore: Number(row.trust_score),
+          trustTier: row.trust_tier,
+          updatedAt: row.updated_at
+        }));
+        return { success: true, users };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve reputations." }
+        });
+      }
+    }
+  );
+
+  // 32. GET /api/admin/reputation/users/:userId/history - Get detailed audit log update history
+  fastify.get<{ Params: { userId: string } }>(
+    "/reputation/users/:userId/history",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { userId } = request.params;
+      try {
+        const res = await query(
+          `SELECT id, old_alpha, old_beta, new_alpha, new_beta, old_trust_score, new_trust_score, old_trust_tier, new_trust_tier, submission_id, submission_type, outcome, created_at
+           FROM agent_reputation_logs
+           WHERE user_id = $1
+           ORDER BY created_at DESC`,
+          [userId]
+        );
+        const history = res.rows.map(row => ({
+          id: row.id,
+          oldAlpha: Number(row.old_alpha),
+          oldBeta: Number(row.old_beta),
+          newAlpha: Number(row.new_alpha),
+          newBeta: Number(row.new_beta),
+          oldTrustScore: Number(row.old_trust_score),
+          newTrustScore: Number(row.new_trust_score),
+          oldTrustTier: row.old_trust_tier,
+          newTrustTier: row.new_trust_tier,
+          submissionId: row.submission_id,
+          submissionType: row.submission_type,
+          outcome: row.outcome,
+          createdAt: row.created_at
+        }));
+        return { success: true, userId, history };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve reputation history." }
+        });
+      }
+    }
+  );
+
+  // 33. GET /api/admin/dependencies/health - Expose circuit breaker statuses
+  fastify.get(
+    "/dependencies/health",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const report = dependencyRegistry.getStatusReport();
+        return { success: true, dependencies: report };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve health status." }
+        });
+      }
+    }
+  );
+
+  // 34. POST /api/admin/verification/recheck/:submissionId - Re-trigger verification for flagged submissions
+  fastify.post<{ Params: { submissionId: string } }>(
+    "/verification/recheck/:submissionId",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { submissionId } = request.params;
+      try {
+        const subRes = await query(
+          `SELECT id, user_id, farm_id, photo_url, crop_type, growth_stage,
+                  ST_X(location::geometry) as longitude, ST_Y(location::geometry) as latitude,
+                  needs_recheck
+           FROM crop_submissions
+           WHERE id = $1`,
+          [submissionId]
+        );
+
+        if (subRes.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "SUBMISSION_NOT_FOUND", message: "Crop submission not found." }
+          });
+        }
+
+        const sub = subRes.rows[0];
+        if (!sub.needs_recheck) {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "NO_RECHECK_REQUIRED", message: "This submission is not flagged for rechecking." }
+          });
+        }
+
+        // Reset needs_recheck flag and set status back to pending
+        await query(
+          `UPDATE crop_submissions 
+           SET needs_recheck = FALSE, verification_status = 'pending' 
+           WHERE id = $1`,
+          [submissionId]
+        );
+
+        // Add job to verification queue
+        await fastify.photoVerificationQueue.add("photo-verification", {
+          submissionId: sub.id,
+          userId: sub.user_id,
+          farmId: sub.farm_id,
+          photoUrl: sub.photo_url,
+          cropType: sub.crop_type,
+          growthStage: sub.growth_stage,
+          latitude: Number(sub.latitude),
+          longitude: Number(sub.longitude)
+        });
+
+        return { success: true, message: "Reverification job queued successfully." };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to trigger recheck." }
+        });
+      }
+    }
+  );
+
+  // 35. GET /api/admin/warning/thresholds - Get threshold register with current values
+  fastify.get(
+    "/warning/thresholds",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          "SELECT metric, threshold_value, protective_action, owner_name, current_status, last_value, updated_at FROM early_warning_thresholds ORDER BY metric ASC"
+        );
+        const thresholds = res.rows.map(row => ({
+          metric: row.metric,
+          thresholdValue: Number(row.threshold_value),
+          protectiveAction: row.protective_action,
+          ownerName: row.owner_name,
+          currentStatus: row.current_status,
+          currentValue: Number(row.last_value),
+          updatedAt: row.updated_at
+        }));
+        return { success: true, thresholds };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve warning thresholds." }
+        });
+      }
+    }
+  );
+
+  // 36. PUT /api/admin/warning/thresholds/:metric - Update threshold configuration
+  fastify.put<{ Params: { metric: string }; Body: { thresholdValue: number; protectiveAction: string; ownerName: string } }>(
+    "/warning/thresholds/:metric",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { metric } = request.params;
+      const { thresholdValue, protectiveAction, ownerName } = request.body;
+
+      try {
+        await query(
+          `UPDATE early_warning_thresholds 
+           SET threshold_value = $1, protective_action = $2, owner_name = $3, updated_at = CURRENT_TIMESTAMP
+           WHERE metric = $4`,
+          [thresholdValue, protectiveAction, ownerName, metric]
+        );
+        return { success: true, message: "Threshold updated successfully." };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to update threshold." }
+        });
+      }
+    }
+  );
+
+  // 37. GET /api/admin/warning/alerts - Get warning alert logs
+  fastify.get(
+    "/warning/alerts",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          "SELECT id, metric, threshold_value, current_value, status, message, signature, created_at FROM early_warning_alerts ORDER BY created_at DESC LIMIT 50"
+        );
+        const alerts = res.rows.map(row => ({
+          id: row.id,
+          metricName: row.metric,
+          thresholdValue: Number(row.threshold_value),
+          currentValue: Number(row.current_value),
+          status: row.status,
+          message: row.message,
+          signature: row.signature,
+          createdAt: row.created_at
+        }));
+        return { success: true, alerts };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve alert logs." }
+        });
+      }
+    }
+  );
+
+  // 38. POST /api/admin/warning/test-inject - Test injector for early-warning verification
+  fastify.post<{ Body: { metric: string; value: number } }>(
+    "/warning/test-inject",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { metric, value } = request.body;
+      try {
+        const { telemetryService } = await import("../services/telemetryService");
+        await telemetryService.injectMetricValue(metric, value);
+        return { success: true, message: `Injected value ${value} for metric ${metric} successfully.` };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to inject test metric value." }
+        });
+      }
+    }
+  );
+
+  // 39. GET /api/admin/farmers/alerts - Get climate alerts logs history
+  fastify.get(
+    "/farmers/alerts",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      try {
+        const res = await query(
+          `SELECT fca.id, fca.metric, fca.probability_estimate, fca.credible_interval_low, fca.credible_interval_high, fca.confidence_level, fca.protective_action, fca.escalation_trigger, fca.message, fca.status, fca.sent_at, fca.created_at, u.full_name, u.county, u.language
+           FROM farmer_climate_alerts fca
+           JOIN users u ON fca.user_id = u.id
+           ORDER BY fca.created_at DESC LIMIT 50`
+        );
+        const alerts = res.rows.map(row => ({
+          id: row.id,
+          metric: row.metric,
+          probabilityEstimate: Number(row.probability_estimate),
+          credibleIntervalLow: Number(row.credible_interval_low),
+          credibleIntervalHigh: Number(row.credible_interval_high),
+          confidenceLevel: row.confidence_level,
+          protectiveAction: row.protective_action,
+          escalationTrigger: row.escalation_trigger,
+          message: row.message,
+          status: row.status,
+          sentAt: row.sent_at,
+          createdAt: row.created_at,
+          farmerName: row.full_name,
+          county: row.county,
+          language: row.language
+        }));
+        return { success: true, alerts };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to retrieve farmer climate alerts." }
+        });
+      }
+    }
+  );
+
+  // 40. POST /api/admin/farmers/alerts/send - Dispatch climate warning alert
+  fastify.post<{ Body: { userId?: string; county?: string; options: { metric: string; unit: string; probability: number; credibleInterval: [number, number]; confidence: "high" | "low"; action: string; escalation: string } } }>(
+    "/farmers/alerts/send",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { userId, county, options } = request.body;
+      try {
+        const { alertComposerService } = await import("../services/alertComposerService");
+        if (userId) {
+          const res = await alertComposerService.sendAlertToUser(userId, options);
+          return { success: true, result: res };
+        } else if (county) {
+          const res = await alertComposerService.sendAlertToCounty(county, options);
+          return { success: true, result: res };
+        } else {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BAD_REQUEST", message: "Must provide either userId or county to send alert." }
+          });
+        }
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to dispatch farmer climate alert." }
+        });
+      }
+    }
+  );
+
+  // 41. PUT /api/admin/farmers/:userId/alerts/toggle - Toggle alerts opt-out preference
+  fastify.put<{ Params: { userId: string }; Body: { enabled: boolean } }>(
+    "/farmers/:userId/alerts/toggle",
+    { onRequest: [fastify.authenticate] },
+    async (request, reply) => {
+      const { userId } = request.params;
+      const { enabled } = request.body;
+      try {
+        await query(
+          "UPDATE users SET alerts_enabled = $1 WHERE id = $2",
+          [enabled, userId]
+        );
+        return { success: true, message: `Alerts successfully ${enabled ? "enabled" : "disabled"} (opted ${enabled ? "in" : "out"}).` };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to toggle user alert preference." }
         });
       }
     }

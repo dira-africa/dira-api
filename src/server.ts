@@ -23,6 +23,8 @@ import agentsRoutes from "./routes/agents";
 import tokensRoutes from "./routes/tokens";
 import adminRoutes from "./routes/admin";
 import adminAuthRoutes from "./routes/adminAuth";
+import adminManagementRoutes from "./routes/adminManagement";
+import blogAdminRoutes from "./routes/blogAdmin";
 import partnerRoutes from "./routes/partner";
 import webhooksRoutes from "./routes/webhooks";
 import cropSubmissionsRoutes from "./routes/cropSubmissions";
@@ -127,7 +129,10 @@ async function main() {
       const route = request.routeOptions.url || request.url;
       if (route === "/metrics" || route === "/api/metrics") return;
       const { metricsService } = await import("./services/metricsService");
+      const { telemetryService } = await import("./services/telemetryService");
+      
       metricsService.incrementRequests(request.method, route, reply.statusCode);
+      telemetryService.recordApiRequest(reply.elapsedTime || 10, reply.statusCode);
     });
 
     // 7. Register Routes
@@ -137,6 +142,8 @@ async function main() {
     await server.register(agentsRoutes, { prefix: "/api/agents" });
     await server.register(tokensRoutes, { prefix: "/api/tokens" });
     await server.register(adminAuthRoutes, { prefix: "/api/admin/auth" });
+    await server.register(adminManagementRoutes, { prefix: "/api/admin/management" });
+    await server.register(blogAdminRoutes, { prefix: "/api/admin/blog" });
     await server.register(adminRoutes, { prefix: "/api/admin" });
     await server.register(partnerRoutes, { prefix: "/api/partner" });
     await server.register(webhooksRoutes, { prefix: "/api/webhooks" });
@@ -167,6 +174,16 @@ async function main() {
     // Start server
     await server.listen({ port: env.PORT, host: env.HOST });
     console.log(`🚀 Dira Backend API server listening on http://${env.HOST}:${env.PORT}`);
+
+    // Register server close hook to stop telemetry gathering
+    server.addHook("onClose", async () => {
+      const { telemetryService } = await import("./services/telemetryService");
+      telemetryService.stop();
+    });
+
+    // Start telemetry warning system
+    const { telemetryService } = await import("./services/telemetryService");
+    telemetryService.start();
   } catch (err) {
     server.log.error(err);
     process.exit(1);

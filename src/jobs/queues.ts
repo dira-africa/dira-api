@@ -50,8 +50,9 @@ const queueOptions: QueueOptions = {
   defaultJobOptions,
 };
 
-// Export four specific BullMQ queues
+// Export five specific BullMQ queues
 export const photoVerificationQueue = new Queue("photo-verification", queueOptions);
 export const atmosphericVerificationQueue = new Queue("atmospheric-verification", queueOptions);
 export const notificationsQueue = new Queue("notifications", queueOptions);
 export const hederaAnchorQueue = new Queue("hedera-anchor", queueOptions);
+export const airtimeQueue = new Queue("airtime", queueOptions);

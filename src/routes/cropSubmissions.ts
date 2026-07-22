@@ -2,6 +2,8 @@ import { FastifyInstance } from "fastify";
 import { query } from "../db/query";
 import { aiService } from "../services/aiService";
 import { tokenService } from "../services/tokenService";
+import { getOutcomeAndReason, getAirtimeBreakdown } from "../services/verificationService";
+import { notificationsQueue } from "../jobs/queues";
 import fs from "fs";
 import path from "path";
 import { Transform } from "stream";
@@ -53,14 +55,38 @@ export default async function cropSubmissionsRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const userId = request.user.id;
       try {
+        const userRes = await query("SELECT language FROM users WHERE id = $1", [userId]);
+        const lang = userRes.rows[0]?.language === "sw" ? "sw" : "en";
+
         const res = await query(
-          `SELECT id, photo_url, crop_type, growth_stage, verification_status, ai_health_score, ai_confidence, submitted_at, rejection_reason, ai_report_en, ai_report_sw 
-           FROM crop_submissions 
-           WHERE user_id = $1 
-           ORDER BY submitted_at DESC`,
+          `SELECT cs.id, cs.photo_url, cs.crop_type, cs.growth_stage, cs.verification_status, cs.ai_health_score, cs.ai_confidence, 
+                  cs.submitted_at, cs.rejection_reason, cs.ai_report_en, cs.ai_report_sw, cs.verification_score, cs.verification_factors,
+                  cs.is_appealed, cs.appeal_reason, cs.appealed_at,
+                  COALESCE(tt.amount, 0) AS actual_tokens
+           FROM crop_submissions cs
+           LEFT JOIN token_transactions tt ON cs.id = tt.reference_id AND tt.type = 'earn' AND tt.status = 'confirmed'
+           WHERE cs.user_id = $1 
+           ORDER BY cs.submitted_at DESC`,
           [userId]
         );
-        return { success: true, submissions: res.rows };
+
+        const submissions = res.rows.map((row: any) => {
+          const outcomeInfo = getOutcomeAndReason(
+            row.verification_status,
+            row.verification_factors,
+            row.rejection_reason,
+            lang
+          );
+          
+          return {
+            ...row,
+            outcome: outcomeInfo.outcome,
+            outcome_reason: outcomeInfo.reason,
+            airtime_breakdown: getAirtimeBreakdown(Number(row.actual_tokens))
+          };
+        });
+
+        return { success: true, submissions };
       } catch (err: any) {
         return reply.status(500).send({
           success: false,
@@ -368,6 +394,107 @@ export default async function cropSubmissionsRoutes(fastify: FastifyInstance) {
         return reply.status(500).send({
           success: false,
           error: { code: "SERVER_ERROR", message: err.message || "Failed to fetch receipt." }
+        });
+      }
+    }
+  );
+
+  // 6. POST /api/crop-submissions/:id/appeal - File an appeal against a rejected or borderline submission
+  fastify.post<{ Params: { id: string }; Body: { reason: string } }>(
+    "/:id/appeal",
+    {
+      onRequest: [fastify.authenticate],
+      config: {
+        rateLimit: {
+          max: 3,
+          timeWindow: "24 hours",
+          keyGenerator: (request: any) => request.user?.id || request.ip,
+          errorResponseBuilder: () => {
+            const error = new Error("You can only submit up to 3 appeals per 24 hours. / Unaweza tu kukata rufaa mara 3 kwa saa 24.") as any;
+            error.statusCode = 429;
+            return error;
+          }
+        }
+      },
+      schema: {
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: {
+            id: { type: "string", format: "uuid" }
+          }
+        },
+        body: {
+          type: "object",
+          required: ["reason"],
+          properties: {
+            reason: { type: "string", minLength: 5, maxLength: 500 }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      const userId = request.user.id;
+      const { id } = request.params;
+      const { reason } = request.body;
+
+      try {
+        const subRes = await query(
+          "SELECT id, verification_status, crop_type FROM crop_submissions WHERE id = $1 AND user_id = $2",
+          [id, userId]
+        );
+
+        if (subRes.rows.length === 0) {
+          return reply.status(404).send({
+            success: false,
+            error: { code: "NOT_FOUND", message: "Crop submission not found." }
+          });
+        }
+
+        const sub = subRes.rows[0];
+
+        const allowedStatus = ["rejected", "manual_review", "escalated"];
+        if (!allowedStatus.includes(sub.verification_status)) {
+          return reply.status(400).send({
+            success: false,
+            error: { code: "BAD_REQUEST", message: "This submission is not eligible for appeal." }
+          });
+        }
+
+        await query(
+          `UPDATE crop_submissions 
+           SET verification_status = 'appealed', 
+               is_appealed = TRUE, 
+               appeal_reason = $1, 
+               appealed_at = CURRENT_TIMESTAMP 
+           WHERE id = $2`,
+          [reason, id]
+        );
+
+        const userRes = await query("SELECT telegram_id, language FROM users WHERE id = $1", [userId]);
+        const farmerTelegramId = userRes.rows[0]?.telegram_id;
+        const farmerLang = userRes.rows[0]?.language || "en";
+
+        if (farmerTelegramId) {
+          const isSw = farmerLang === "sw";
+          const appealMsg = isSw
+            ? `Rufaa yako ya uwasilishaji wa ${sub.crop_type} imepokelewa na inafanyiwa ukaguzi wa mwongozo sasa.`
+            : `Your appeal for crop submission ${sub.crop_type} has been received and is now undergoing manual review.`;
+
+          await notificationsQueue.add("send-telegram", {
+            telegramId: String(farmerTelegramId),
+            message: appealMsg
+          });
+        }
+
+        return {
+          success: true,
+          message: "Appeal submitted successfully and queued for human review."
+        };
+      } catch (err: any) {
+        return reply.status(500).send({
+          success: false,
+          error: { code: "SERVER_ERROR", message: err.message || "Failed to submit appeal." }
         });
       }
     }

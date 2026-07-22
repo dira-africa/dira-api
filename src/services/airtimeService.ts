@@ -19,7 +19,8 @@ import { randomUUID, createHash } from "crypto";
 import { query } from "../db/query";
 import { tokenService, deductTokens, refundTokens } from "./tokenService";
 import { env } from "../config/env";
-import { notificationsQueue } from "../jobs/queues";
+import { notificationsQueue, airtimeQueue } from "../jobs/queues";
+import { dependencyRegistry } from "./dependencyRegistry";
 
 // Initialize Africa's Talking SDK.
 const at = AfricaTalking({
@@ -98,6 +99,46 @@ export async function initiateAirtimeRedemption(
     return { success: false, error: "INSUFFICIENT_TOKENS" };
   }
 
+  // Queue background disburser job
+  try {
+    await airtimeQueue.add("disburse-airtime", {
+      redemptionId,
+      userId,
+      phoneNumber: formattedPhoneNumber,
+      tokenAmount
+    });
+    console.log(`Queued background airtime disbursement job for redemption: ${redemptionId}`);
+  } catch (queueErr: any) {
+    console.error("Failed to queue background airtime job:", queueErr.message);
+  }
+
+  return { success: true, transactionId: redemptionId };
+}
+
+/**
+ * Asynchronously processes the queued airtime disburser job.
+ */
+export async function processQueuedAirtime(
+  redemptionId: string,
+  userId: string,
+  phoneNumber: string,
+  tokenAmount: number
+): Promise<{ success: boolean; transactionId?: string; error?: string }> {
+  const KES_PER_TOKEN = 0.55;
+  const kesAmount = tokenAmount * KES_PER_TOKEN;
+  
+  const formattedPhoneNumber = phoneNumber.startsWith("0")
+    ? `+254${phoneNumber.substring(1)}`
+    : phoneNumber.startsWith("+")
+      ? phoneNumber
+      : `+${phoneNumber}`;
+
+  // Circuit Breaker check
+  if (!dependencyRegistry.isAvailable("africastalking")) {
+    console.warn("⚠️ Africa's Talking Circuit Breaker is OPEN. Skipping disbursement.");
+    throw new Error("AFRICAS_TALKING_API_OFFLINE");
+  }
+
   try {
     const useMock = 
       !(process.env.AT_API_KEY || env.AFRICAS_TALKING_API_KEY) || 
@@ -142,18 +183,7 @@ export async function initiateAirtimeRedemption(
     }
 
     if (sendStatus !== "Sent") {
-      // Refund on AT failure
-      await refundTokens(userId, tokenAmount, redemptionId);
-
-      // Update request status to failed
-      await query(
-        `UPDATE redemption_requests 
-         SET status = 'failed', failure_reason = $1, completed_at = CURRENT_TIMESTAMP 
-         WHERE id = $2`,
-        [errorMsg || "Africa's Talking Send Failed", redemptionId]
-      );
-
-      return { success: false, error: "AT_SEND_FAILED" };
+      throw new Error(errorMsg || "Africa's Talking Send Failed");
     }
 
     // On success: update record
@@ -165,6 +195,8 @@ export async function initiateAirtimeRedemption(
        WHERE id = $2`,
       [atRequestId, redemptionId]
     );
+
+    dependencyRegistry.recordSuccess("africastalking");
 
     // Send success notification via Telegram
     try {
@@ -188,20 +220,9 @@ export async function initiateAirtimeRedemption(
     return { success: true, transactionId: atRequestId };
 
   } catch (err: any) {
-    try {
-      await refundTokens(userId, tokenAmount, redemptionId);
-    } catch (refundErr) {
-      console.error("Critical: Failed to refund tokens after unexpected AT error:", refundErr);
-    }
-
-    await query(
-      `UPDATE redemption_requests 
-       SET status = 'failed', failure_reason = $1, completed_at = CURRENT_TIMESTAMP 
-       WHERE id = $2`,
-      [err.message || "AIRTIME_SERVICE_ERROR", redemptionId]
-    );
-
-    return { success: false, error: "AIRTIME_SERVICE_ERROR" };
+    console.error("Africa's Talking disbursement failed:", err.message);
+    dependencyRegistry.recordFailure("africastalking", err);
+    throw err;
   }
 }
 
@@ -251,6 +272,18 @@ export class AirtimeService {
       phone: formattedPhoneNumber,
       transactionId: res.transactionId!
     };
+  }
+
+  /**
+   * compatibility worker invoker.
+   */
+  async processQueuedAirtime(
+    redemptionId: string,
+    userId: string,
+    phoneNumber: string,
+    tokenAmount: number
+  ) {
+    return processQueuedAirtime(redemptionId, userId, phoneNumber, tokenAmount);
   }
 
   /**
